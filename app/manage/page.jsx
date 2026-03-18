@@ -24,6 +24,36 @@ import ConfirmDialog from '../components/ConfirmDialog'
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`
 const blankTask = () => ({ id: uid(), text: '', duration: 25, completed: false })
 
+function computeStartTimes(tasks, sessionStart) {
+  // Base time: session start if active, otherwise current time rounded up to next 5 min
+  let base
+  if (sessionStart) {
+    base = sessionStart
+  } else {
+    const now = Date.now()
+    const remainder = (5 - ((Math.floor(now / 60000)) % 5)) % 5
+    base = now + remainder * 60000
+  }
+
+  const starts = []
+  let cursor = base
+  for (const task of tasks) {
+    starts.push(cursor)
+    cursor += task.duration * 60 * 1000
+  }
+  return starts
+}
+
+function msToTimeStr(ms) {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function timeStrToMinutes(str) {
+  const [h, m] = str.split(':').map(Number)
+  return h * 60 + m
+}
+
 export default function ManagePage() {
   const [tasks, setTasks]               = useState([blankTask()])
   const [sessionStart, setSessionStart] = useState(null)
@@ -186,6 +216,7 @@ export default function ManagePage() {
   const endTime     = sessionStart
     ? new Date(sessionStart + totalMin * 60 * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : null
+  const taskStartTimes = computeStartTimes(tasks, sessionStart)
 
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
@@ -213,6 +244,7 @@ export default function ManagePage() {
                   task={task}
                   idx={idx}
                   isLast={idx === tasks.length - 1}
+                  startMs={taskStartTimes[idx]}
                   inputRefs={inputRefs}
                   updateField={updateField}
                   toggleCompleted={toggleCompleted}
@@ -252,7 +284,7 @@ export default function ManagePage() {
             {sessionStart && (
               <button
                 onClick={() => setConfirmReset(true)}
-                className="text-[var(--text-muted)] hover:text-[var(--text)] text-sm px-4 py-2 rounded-full border border-[var(--border)] hover:border-[var(--border-hover)] transition-colors"
+                className="text-[var(--text-muted)] hover:text-[var(--text)] text-sm px-7 py-2.5 rounded-full border border-[var(--border)] hover:border-[var(--border-hover)] transition-colors"
               >
                 Reset
               </button>
@@ -284,7 +316,7 @@ export default function ManagePage() {
   )
 }
 
-function SortableTask({ task, idx, isLast, inputRefs, updateField, toggleCompleted, handlePaste, handleKeyDown, deleteTask }) {
+function SortableTask({ task, idx, isLast, startMs, inputRefs, updateField, toggleCompleted, handlePaste, handleKeyDown, deleteTask }) {
   const {
     attributes,
     listeners,
@@ -298,6 +330,25 @@ function SortableTask({ task, idx, isLast, inputRefs, updateField, toggleComplet
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
+  }
+
+  const startStr = msToTimeStr(startMs)
+  const endStr   = msToTimeStr(startMs + task.duration * 60 * 1000)
+
+  const handleStartChange = (e) => {
+    const newStartMin = timeStrToMinutes(e.target.value)
+    const endMin      = timeStrToMinutes(endStr)
+    let diff = endMin - newStartMin
+    if (diff <= 0) diff += 24 * 60 // midnight crossing
+    updateField(task.id, 'duration', Math.max(1, Math.min(480, diff)))
+  }
+
+  const handleEndChange = (e) => {
+    const startMin = timeStrToMinutes(startStr)
+    const newEndMin = timeStrToMinutes(e.target.value)
+    let diff = newEndMin - startMin
+    if (diff <= 0) diff += 24 * 60 // midnight crossing
+    updateField(task.id, 'duration', Math.max(1, Math.min(480, diff)))
   }
 
   return (
@@ -352,8 +403,22 @@ function SortableTask({ task, idx, isLast, inputRefs, updateField, toggleComplet
         }`}
       />
 
-      {/* duration + controls (visible on hover) */}
+      {/* time range + duration + controls (visible on hover) */}
       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
+        <input
+          type="time"
+          value={startStr}
+          onChange={handleStartChange}
+          className="bg-[var(--bg-hover)] border border-[var(--border)] rounded px-1.5 py-1 text-xs outline-none focus:border-[var(--text-muted)] text-[var(--text)]"
+        />
+        <span className="text-[var(--text-dim)] text-xs">&rarr;</span>
+        <input
+          type="time"
+          value={endStr}
+          onChange={handleEndChange}
+          className="bg-[var(--bg-hover)] border border-[var(--border)] rounded px-1.5 py-1 text-xs outline-none focus:border-[var(--text-muted)] text-[var(--text)]"
+        />
+
         <input
           type="number"
           value={task.duration}
