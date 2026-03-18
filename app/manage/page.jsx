@@ -228,8 +228,8 @@ export default function ManagePage() {
   const taskStartTimes = computeStartTimes(tasks, sessionStart, plannedStart)
 
   return (
-    <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
-      <div className="max-w-2xl mx-auto px-6 py-12">
+    <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex items-start justify-center">
+      <div className="max-w-4xl w-full mx-auto px-4 sm:px-8 lg:px-10 pt-[12vh] pb-20">
 
         {/* Header */}
         <div className="flex items-center justify-between mb-1">
@@ -238,8 +238,8 @@ export default function ManagePage() {
             &rarr; dashboard
           </Link>
         </div>
-        <h1 className="text-3xl font-bold mb-2">Today&apos;s Focus</h1>
-        <p className="text-[var(--text-dim)] text-sm mb-10">
+        <h1 className="text-5xl font-bold mb-3">Today&apos;s Focus</h1>
+        <p className="text-[var(--text-dim)] text-base mb-12">
           Paste a list from Notion to auto-import all tasks at once.
         </p>
 
@@ -279,7 +279,7 @@ export default function ManagePage() {
             persist([...tasks, fresh])
             setTimeout(() => inputRefs.current[fresh.id]?.focus(), 50)
           }}
-          className="mt-3 text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm flex items-center gap-2 transition-colors px-2"
+          className="mt-4 text-[var(--text-dim)] hover:text-[var(--text-muted)] text-base flex items-center gap-2 transition-colors px-2"
         >
           <span className="text-lg leading-none">+</span> add task
         </button>
@@ -405,7 +405,7 @@ function SortableTask({ task, idx, isFirst, isLast, startMs, sessionActive, onPl
         onPaste={e => handlePaste(e, task.id)}
         onKeyDown={e => handleKeyDown(e, task.id, idx)}
         placeholder="What are you working on?"
-        className={`flex-1 bg-transparent outline-none py-2 text-base placeholder:text-[var(--text-dim)] caret-[var(--text)] text-[var(--text)] ${
+        className={`flex-1 bg-transparent outline-none py-2.5 text-xl placeholder:text-[var(--text-dim)] caret-[var(--text)] text-[var(--text)] ${
           task.completed ? 'line-through opacity-50' : ''
         }`}
       />
