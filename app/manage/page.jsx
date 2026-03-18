@@ -24,11 +24,16 @@ import ConfirmDialog from '../components/ConfirmDialog'
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`
 const blankTask = () => ({ id: uid(), text: '', duration: 25, completed: false })
 
-function computeStartTimes(tasks, sessionStart) {
-  // Base time: session start if active, otherwise current time rounded up to next 5 min
+function computeStartTimes(tasks, sessionStart, plannedStart) {
   let base
   if (sessionStart) {
     base = sessionStart
+  } else if (plannedStart) {
+    // Convert HH:MM string to today's date at that time
+    const [h, m] = plannedStart.split(':').map(Number)
+    const d = new Date()
+    d.setHours(h, m, 0, 0)
+    base = d.getTime()
   } else {
     const now = Date.now()
     const remainder = (5 - ((Math.floor(now / 60000)) % 5)) % 5
@@ -57,6 +62,7 @@ function timeStrToMinutes(str) {
 export default function ManagePage() {
   const [tasks, setTasks]               = useState([blankTask()])
   const [sessionStart, setSessionStart] = useState(null)
+  const [plannedStart, setPlannedStart] = useState(null)
   const [mounted, setMounted]           = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
   const inputRefs = useRef({})
@@ -75,6 +81,8 @@ export default function ManagePage() {
       setTasks(parsed.length ? parsed : [blankTask()])
     }
     if (sess) setSessionStart(Number(sess))
+    const ps = localStorage.getItem('focusboard-planned-start')
+    if (ps) setPlannedStart(ps)
   }, [])
 
   // Cmd/Ctrl+Enter to start session
@@ -216,7 +224,7 @@ export default function ManagePage() {
   const endTime     = sessionStart
     ? new Date(sessionStart + totalMin * 60 * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : null
-  const taskStartTimes = computeStartTimes(tasks, sessionStart)
+  const taskStartTimes = computeStartTimes(tasks, sessionStart, plannedStart)
 
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
@@ -243,8 +251,14 @@ export default function ManagePage() {
                   key={task.id}
                   task={task}
                   idx={idx}
+                  isFirst={idx === 0}
                   isLast={idx === tasks.length - 1}
                   startMs={taskStartTimes[idx]}
+                  sessionActive={!!sessionStart}
+                  onPlannedStartChange={(val) => {
+                    setPlannedStart(val)
+                    localStorage.setItem('focusboard-planned-start', val)
+                  }}
                   inputRefs={inputRefs}
                   updateField={updateField}
                   toggleCompleted={toggleCompleted}
@@ -280,16 +294,16 @@ export default function ManagePage() {
             )}
           </div>
 
-          <div className="flex items-center gap-3">
-            {sessionStart && (
-              <button
-                onClick={() => setConfirmReset(true)}
-                className="text-[var(--text-muted)] hover:text-[var(--text)] text-sm px-7 py-2.5 rounded-full border border-[var(--border)] hover:border-[var(--border-hover)] transition-colors"
-              >
-                Reset
-              </button>
-            )}
-            <div className="flex flex-col items-end gap-1">
+          <div className="flex flex-col items-end gap-1.5">
+            <div className="flex items-center gap-3">
+              {sessionStart && (
+                <button
+                  onClick={() => setConfirmReset(true)}
+                  className="text-[var(--text-muted)] hover:text-[var(--text)] text-sm px-7 py-2.5 rounded-full border border-[var(--border)] hover:border-[var(--border-hover)] transition-colors"
+                >
+                  Reset
+                </button>
+              )}
               <button
                 onClick={startSession}
                 disabled={validTasks.length === 0}
@@ -297,10 +311,10 @@ export default function ManagePage() {
               >
                 {sessionStart ? 'Restart' : 'Start Session'}
               </button>
-              <span className="text-[var(--text-dim)] text-[10px]">
-                {navigator?.platform?.includes('Mac') ? '\u2318' : 'Ctrl'}+Enter
-              </span>
             </div>
+            <span className="text-[var(--text-dim)] text-xs">
+              {navigator?.platform?.includes('Mac') ? '\u2318' : 'Ctrl'}+Enter
+            </span>
           </div>
         </div>
 
@@ -316,7 +330,7 @@ export default function ManagePage() {
   )
 }
 
-function SortableTask({ task, idx, isLast, startMs, inputRefs, updateField, toggleCompleted, handlePaste, handleKeyDown, deleteTask }) {
+function SortableTask({ task, idx, isFirst, isLast, startMs, sessionActive, onPlannedStartChange, inputRefs, updateField, toggleCompleted, handlePaste, handleKeyDown, deleteTask }) {
   const {
     attributes,
     listeners,
@@ -335,16 +349,8 @@ function SortableTask({ task, idx, isLast, startMs, inputRefs, updateField, togg
   const startStr = msToTimeStr(startMs)
   const endStr   = msToTimeStr(startMs + task.duration * 60 * 1000)
 
-  const handleStartChange = (e) => {
-    const newStartMin = timeStrToMinutes(e.target.value)
-    const endMin      = timeStrToMinutes(endStr)
-    let diff = endMin - newStartMin
-    if (diff <= 0) diff += 24 * 60 // midnight crossing
-    updateField(task.id, 'duration', Math.max(1, Math.min(480, diff)))
-  }
-
   const handleEndChange = (e) => {
-    const startMin = timeStrToMinutes(startStr)
+    const startMin  = timeStrToMinutes(startStr)
     const newEndMin = timeStrToMinutes(e.target.value)
     let diff = newEndMin - startMin
     if (diff <= 0) diff += 24 * 60 // midnight crossing
@@ -405,12 +411,16 @@ function SortableTask({ task, idx, isLast, startMs, inputRefs, updateField, togg
 
       {/* time range + duration + controls (visible on hover) */}
       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
-        <input
-          type="time"
-          value={startStr}
-          onChange={handleStartChange}
-          className="bg-[var(--bg-hover)] border border-[var(--border)] rounded px-1.5 py-1 text-xs outline-none focus:border-[var(--text-muted)] text-[var(--text)]"
-        />
+        {isFirst && !sessionActive ? (
+          <input
+            type="time"
+            value={startStr}
+            onChange={(e) => onPlannedStartChange(e.target.value)}
+            className="bg-[var(--bg-hover)] border border-[var(--border)] rounded px-1.5 py-1 text-xs outline-none focus:border-[var(--text-muted)] text-[var(--text)]"
+          />
+        ) : (
+          <span className="text-[var(--text-muted)] text-xs tabular-nums">{startStr}</span>
+        )}
         <span className="text-[var(--text-dim)] text-xs">&rarr;</span>
         <input
           type="time"

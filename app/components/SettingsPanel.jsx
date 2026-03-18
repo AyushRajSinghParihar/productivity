@@ -9,6 +9,7 @@ const ALL_KEYS = [
   'focusboard-skip-offset',
   'focusboard-settings',
   'focusboard-history',
+  'focusboard-planned-start',
 ]
 
 export default function SettingsPanel({ isOpen, onClose }) {

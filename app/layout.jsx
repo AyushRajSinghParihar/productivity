@@ -4,6 +4,7 @@ import Toolbar from './components/Toolbar'
 export const metadata = {
   title: 'Focus Board',
   description: 'Your personal focus dashboard',
+  icons: { icon: '/favicon.svg' },
 }
 
 const themeScript = `
