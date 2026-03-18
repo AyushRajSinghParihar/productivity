@@ -50,6 +50,7 @@ npm run dev
 
 ### Task Management
 - **Drag-and-drop reordering** on the manage page
+- **Time-range or duration** — set task length in minutes, or pick a start/end time (e.g., 1:00 AM → 2:00 AM) and duration auto-calculates
 - **Notion paste** — copy 5 tasks from Notion, paste once → 5 rows appear instantly
 - **Keyboard nav** — Enter to add task, Backspace on empty to delete, Arrow keys to navigate
 
