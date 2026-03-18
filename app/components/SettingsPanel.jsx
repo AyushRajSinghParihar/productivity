@@ -10,6 +10,8 @@ const ALL_KEYS = [
   'focusboard-settings',
   'focusboard-history',
   'focusboard-planned-start',
+  'focusboard-paused-at',
+  'focusboard-manual-break',
 ]
 
 export default function SettingsPanel({ isOpen, onClose }) {

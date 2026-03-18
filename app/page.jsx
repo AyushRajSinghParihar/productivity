@@ -1,8 +1,8 @@
 'use client'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
-import { getSettings } from './lib/settings'
-import { getEffectiveDate } from './lib/settings'
+import { useRouter } from 'next/navigation'
+import { getSettings, getEffectiveDate } from './lib/settings'
 import { playNotificationSound } from './lib/audio'
 import { saveSession } from './lib/history'
 import SessionHistory from './components/SessionHistory'
@@ -17,11 +17,15 @@ export default function Dashboard() {
   const [tasks, setTasks]               = useState([])
   const [sessionStart, setSessionStart] = useState(null)
   const [skipOffset, setSkipOffset]     = useState(0)
+  const [paused, setPaused]             = useState(false)
+  const [pausedAt, setPausedAt]         = useState(null)
+  const [manualBreak, setManualBreak]   = useState(false)
   const [now, setNow]                   = useState(null)
   const [mounted, setMounted]           = useState(false)
   const [flashing, setFlashing]         = useState(false)
   const [settings, setSettings]         = useState(null)
 
+  const router = useRouter()
   const notifiedTaskRef = useRef(null)
   const sessionSavedRef = useRef(false)
   const defaultTitle    = useRef('Focus Board')
@@ -40,6 +44,12 @@ export default function Dashboard() {
 
     const skip = localStorage.getItem('focusboard-skip-offset')
     if (skip) setSkipOffset(Number(skip))
+
+    const p = localStorage.getItem('focusboard-paused-at')
+    if (p) { setPaused(true); setPausedAt(Number(p)) }
+
+    const mb = localStorage.getItem('focusboard-manual-break')
+    if (mb) setManualBreak(true)
 
     // Poll localStorage every 2s for cross-page sync
     const poll = setInterval(() => {
@@ -66,6 +76,9 @@ export default function Dashboard() {
   const breaksEnabled = settings?.breaksEnabled ?? false
   const breakDuration = (settings?.breakDuration ?? 5) * 60 // seconds
 
+  // Use pausedAt as "now" when paused so timer freezes
+  const effectiveNow = paused && pausedAt ? pausedAt : now
+
   let currentTask   = null
   let secondsLeft   = 0
   let nextTask      = null
@@ -73,8 +86,8 @@ export default function Dashboard() {
   let allDone       = false
   let currentTaskIdx = -1
 
-  if (sessionStart && validTasks.length > 0 && now) {
-    let elapsed = Math.floor((now - sessionStart) / 1000) + skipOffset
+  if (sessionStart && validTasks.length > 0 && effectiveNow) {
+    let elapsed = Math.floor((effectiveNow - sessionStart) / 1000) + skipOffset
     let cursor  = 0
 
     for (let i = 0; i < validTasks.length; i++) {
@@ -103,7 +116,6 @@ export default function Dashboard() {
         if (elapsed < cursor + breakDuration) {
           isOnBreak   = true
           secondsLeft = cursor + breakDuration - elapsed
-          // Next task is the one after the break
           const nextIdx = nextNonCompleted(validTasks, i)
           if (nextIdx !== null) {
             currentTask    = validTasks[nextIdx]
@@ -122,9 +134,9 @@ export default function Dashboard() {
 
   // Auto-mark task completed when timer expires
   useEffect(() => {
-    if (!sessionStart || !now || !validTasks.length) return
+    if (!sessionStart || !effectiveNow || !validTasks.length || paused) return
 
-    let elapsed = Math.floor((now - sessionStart) / 1000) + skipOffset
+    let elapsed = Math.floor((effectiveNow - sessionStart) / 1000) + skipOffset
     let cursor  = 0
 
     for (let i = 0; i < validTasks.length; i++) {
@@ -132,7 +144,6 @@ export default function Dashboard() {
       if (task.completed) continue
       const dur = task.duration * 60
       if (elapsed >= cursor + dur) {
-        // This task's time has passed — mark completed if not already
         if (!task.completed) {
           const updated = tasks.map(t =>
             t.id === task.id ? { ...t, completed: true } : t
@@ -146,13 +157,12 @@ export default function Dashboard() {
         break
       }
     }
-  }, [now, sessionStart, skipOffset])
+  }, [effectiveNow, sessionStart, skipOffset, paused])
 
   // Notification when task time runs out
   useEffect(() => {
     if (!currentTask || !settings) return
 
-    // Notify when secondsLeft hits 0 or transitions to a new task
     if (secondsLeft <= 1 && notifiedTaskRef.current !== currentTask.id) {
       notifiedTaskRef.current = currentTask.id
       if (settings.notificationSound) playNotificationSound()
@@ -166,7 +176,11 @@ export default function Dashboard() {
   // Update tab title
   useEffect(() => {
     if (!mounted) return
-    if (currentTask && secondsLeft > 0) {
+    if (paused) {
+      document.title = 'Paused | Focus Board'
+    } else if (manualBreak) {
+      document.title = 'Break | Focus Board'
+    } else if (currentTask && secondsLeft > 0) {
       if (isOnBreak) {
         document.title = `Break ${formatCountdown(secondsLeft)} | Focus Board`
       } else {
@@ -177,7 +191,7 @@ export default function Dashboard() {
     } else {
       document.title = defaultTitle.current
     }
-  }, [secondsLeft, currentTask, isOnBreak, allDone, mounted])
+  }, [secondsLeft, currentTask, isOnBreak, allDone, mounted, paused, manualBreak])
 
   // Save session to history when all done
   useEffect(() => {
@@ -213,7 +227,6 @@ export default function Dashboard() {
     setSkipOffset(newOffset)
     localStorage.setItem('focusboard-skip-offset', String(newOffset))
 
-    // Mark skipped task as completed
     const updated = tasks.map(t =>
       t.id === currentTask.id ? { ...t, completed: true } : t
     )
@@ -221,6 +234,33 @@ export default function Dashboard() {
     localStorage.setItem('focusboard-tasks', JSON.stringify(updated))
     notifiedTaskRef.current = null
   }, [currentTask, skipOffset, secondsLeft, tasks])
+
+  const handlePause = useCallback(() => {
+    const pauseTime = Date.now()
+    setPaused(true)
+    setPausedAt(pauseTime)
+    localStorage.setItem('focusboard-paused-at', String(pauseTime))
+  }, [])
+
+  const handleResume = useCallback(() => {
+    if (!pausedAt) return
+    // Shift session start forward by the paused duration so timer continues from where it stopped
+    const pausedDuration = Date.now() - pausedAt
+    const newStart = sessionStart + pausedDuration
+    setSessionStart(newStart)
+    localStorage.setItem('focusboard-session', String(newStart))
+    setPaused(false)
+    setPausedAt(null)
+    localStorage.removeItem('focusboard-paused-at')
+    setManualBreak(false)
+    localStorage.removeItem('focusboard-manual-break')
+  }, [pausedAt, sessionStart])
+
+  const handleTakeBreak = useCallback(() => {
+    setManualBreak(true)
+    localStorage.setItem('focusboard-manual-break', '1')
+    handlePause()
+  }, [handlePause])
 
   if (!mounted) return null
 
@@ -254,16 +294,7 @@ export default function Dashboard() {
             </Link>
           </>
         ) : (
-          <>
-            <p className="text-[var(--text-dim)] text-2xl uppercase tracking-widest">No tasks planned</p>
-            <p className="text-[var(--text-muted)] text-base">Add some tasks to get started</p>
-            <Link
-              href="/manage"
-              className="border border-[var(--border)] hover:border-[var(--text)] text-[var(--text)] px-8 py-3 rounded-full text-lg transition-colors"
-            >
-              Plan your day &rarr;
-            </Link>
-          </>
+          router.push('/manage')
         )}
         <SessionHistory />
       </div>
@@ -292,7 +323,89 @@ export default function Dashboard() {
     )
   }
 
-  // ── Break state ───────────────────────────────────────────────────
+  // ── Manual break (paused by user) ─────────────────────────────────
+  if (manualBreak && paused) {
+    return (
+      <div className="min-h-screen bg-[var(--bg)] flex flex-col items-center justify-center relative overflow-hidden select-none">
+        <p className="text-[var(--success)] text-sm uppercase tracking-[0.4em] mb-6">Break Time</p>
+
+        <h1
+          className="font-black uppercase text-[var(--success)] leading-none text-center px-6"
+          style={{ fontSize: 'clamp(2.5rem, 9vw, 8rem)' }}
+        >
+          RELAX
+        </h1>
+
+        <p className="text-[var(--text-dim)] text-lg mt-8">Timer paused &mdash; resume when ready</p>
+
+        {currentTask && (
+          <p className="text-[var(--text-dim)] text-lg uppercase tracking-widest mt-6">
+            Up next &rarr; {currentTask.text}
+          </p>
+        )}
+
+        <button
+          onClick={handleResume}
+          className="mt-8 bg-[var(--text)] text-[var(--bg)] font-bold px-8 py-3 rounded-full hover:opacity-90 transition-colors"
+        >
+          End Break
+        </button>
+
+        <Link
+          href="/manage"
+          className="absolute bottom-6 right-6 text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm transition-colors"
+        >
+          manage
+        </Link>
+      </div>
+    )
+  }
+
+  // ── Paused ────────────────────────────────────────────────────────
+  if (paused && currentTask) {
+    const taskDurSec = currentTask.duration * 60
+    const progress   = ((taskDurSec - secondsLeft) / taskDurSec) * 100
+
+    return (
+      <div className="min-h-screen bg-[var(--bg)] flex flex-col items-center justify-center relative overflow-hidden select-none">
+        <div className="absolute top-0 left-0 h-1 bg-[var(--bg-hover)] w-full">
+          <div className="h-full bg-[var(--accent)]" style={{ width: `${progress}%` }} />
+        </div>
+
+        <p className="text-[var(--accent)] text-sm uppercase tracking-[0.4em] mb-6">Paused</p>
+
+        <h1
+          className="font-black uppercase text-[var(--text)] leading-none text-center px-6 opacity-50"
+          style={{ fontSize: 'clamp(2.5rem, 9vw, 8rem)', wordBreak: 'break-word', maxWidth: '90vw' }}
+        >
+          {currentTask.text}
+        </h1>
+
+        <p
+          className="font-mono font-bold mt-8 tabular-nums text-[var(--accent)] opacity-50"
+          style={{ fontSize: 'clamp(2rem, 6vw, 4.5rem)' }}
+        >
+          {formatCountdown(secondsLeft)}
+        </p>
+
+        <button
+          onClick={handleResume}
+          className="mt-10 bg-[var(--text)] text-[var(--bg)] font-bold px-8 py-3 rounded-full hover:opacity-90 transition-colors"
+        >
+          Resume
+        </button>
+
+        <Link
+          href="/manage"
+          className="absolute bottom-6 right-6 text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm transition-colors"
+        >
+          manage
+        </Link>
+      </div>
+    )
+  }
+
+  // ── Auto break (between tasks) ────────────────────────────────────
   if (isOnBreak) {
     return (
       <div className={`min-h-screen bg-[var(--bg)] flex flex-col items-center justify-center relative overflow-hidden select-none ${flashing ? 'flash-notification' : ''}`}>
@@ -342,6 +455,9 @@ export default function Dashboard() {
     )
   }
 
+  // ── Null guard (currentTask could be null during initial render) ───
+  if (!currentTask) return null
+
   // ── Active task ─────────────────────────────────────────────────────
   const urgency    = secondsLeft < 120
   const taskDurSec = currentTask.duration * 60
@@ -376,21 +492,34 @@ export default function Dashboard() {
         {formatCountdown(secondsLeft)}
       </p>
 
-      {/* skip + next */}
-      <div className="flex flex-col items-center mt-10 gap-4">
+      {/* action buttons */}
+      <div className="flex items-center gap-3 mt-10">
+        <button
+          onClick={handlePause}
+          className="text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm border border-[var(--border)] hover:border-[var(--border-hover)] px-6 py-2 rounded-full transition-colors"
+        >
+          Pause
+        </button>
+        <button
+          onClick={handleTakeBreak}
+          className="text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm border border-[var(--border)] hover:border-[var(--border-hover)] px-6 py-2 rounded-full transition-colors"
+        >
+          Take a Break
+        </button>
         <button
           onClick={handleSkip}
           className="text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm border border-[var(--border)] hover:border-[var(--border-hover)] px-6 py-2 rounded-full transition-colors"
         >
           Skip &rarr;
         </button>
-
-        {nextTask && (
-          <p className="text-[var(--text-dim)] text-lg uppercase tracking-widest">
-            Next &rarr; {nextTask.text}
-          </p>
-        )}
       </div>
+
+      {/* next task */}
+      {nextTask && (
+        <p className="text-[var(--text-dim)] text-lg uppercase tracking-widest mt-6">
+          Next &rarr; {nextTask.text}
+        </p>
+      )}
 
       {/* manage link */}
       <Link
