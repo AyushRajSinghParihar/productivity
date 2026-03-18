@@ -20,6 +20,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { getSettings, getEffectiveDate } from '../lib/settings'
 import { saveSession } from '../lib/history'
 import ConfirmDialog from '../components/ConfirmDialog'
+import TimeInput from '../components/TimeInput'
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`
 const blankTask = () => ({ id: uid(), text: '', duration: 25, completed: false })
@@ -349,9 +350,9 @@ function SortableTask({ task, idx, isFirst, isLast, startMs, sessionActive, onPl
   const startStr = msToTimeStr(startMs)
   const endStr   = msToTimeStr(startMs + task.duration * 60 * 1000)
 
-  const handleEndChange = (e) => {
+  const handleEndChange = (newEndStr) => {
     const startMin  = timeStrToMinutes(startStr)
-    const newEndMin = timeStrToMinutes(e.target.value)
+    const newEndMin = timeStrToMinutes(newEndStr)
     let diff = newEndMin - startMin
     if (diff <= 0) diff += 24 * 60 // midnight crossing
     updateField(task.id, 'duration', Math.max(1, Math.min(480, diff)))
@@ -412,21 +413,19 @@ function SortableTask({ task, idx, isFirst, isLast, startMs, sessionActive, onPl
       {/* time range + duration + controls (visible on hover) */}
       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
         {isFirst && !sessionActive ? (
-          <input
-            type="time"
+          <TimeInput
             value={startStr}
-            onChange={(e) => onPlannedStartChange(e.target.value)}
-            className="bg-[var(--bg-hover)] border border-[var(--border)] rounded px-1.5 py-1 text-xs outline-none focus:border-[var(--text-muted)] text-[var(--text)]"
+            onChange={onPlannedStartChange}
+            className="w-16 bg-[var(--bg-hover)] border border-[var(--border)] rounded px-1.5 py-1 text-xs text-center outline-none focus:border-[var(--text-muted)] text-[var(--text)]"
           />
         ) : (
           <span className="text-[var(--text-muted)] text-xs tabular-nums">{startStr}</span>
         )}
         <span className="text-[var(--text-dim)] text-xs">&rarr;</span>
-        <input
-          type="time"
+        <TimeInput
           value={endStr}
           onChange={handleEndChange}
-          className="bg-[var(--bg-hover)] border border-[var(--border)] rounded px-1.5 py-1 text-xs outline-none focus:border-[var(--text-muted)] text-[var(--text)]"
+          className="w-16 bg-[var(--bg-hover)] border border-[var(--border)] rounded px-1.5 py-1 text-xs text-center outline-none focus:border-[var(--text-muted)] text-[var(--text)]"
         />
 
         <input
