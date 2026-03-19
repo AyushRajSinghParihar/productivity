@@ -40,8 +40,11 @@ npm run dev
 - **Turns red** in the last 2 minutes of a task
 - **Auto-advances** to next task when timer hits zero
 - **Skip task** button to jump to the next task
+- **Pause / Resume** — freeze the timer mid-task and pick up where you left off
+- **Take a Break** — enter a manual break mode (no countdown, resume when ready)
 - **Task checkmarks** — mark tasks as completed manually or auto-complete on timer expiry
-- **Optional break intervals** — configurable breaks between tasks (enable in settings)
+- **Optional break intervals** — configurable timed breaks between tasks (enable in settings)
+- **Confirm before reset** — dialog prevents accidental session loss
 
 ### Notifications
 - **Audio notification** — beep sound when a task's time runs out (Web Audio API)
@@ -50,9 +53,11 @@ npm run dev
 
 ### Task Management
 - **Drag-and-drop reordering** on the manage page
-- **Time-range or duration** — set task length in minutes, or pick a start/end time (e.g., 1:00 AM → 2:00 AM) and duration auto-calculates
+- **Time-range or duration** — set task length in minutes, or type a start/end time (e.g., "2pm", "1330", "9") and duration auto-calculates
+- **Planned start time** — set when your day starts on the first task, all other times cascade
 - **Notion paste** — copy 5 tasks from Notion, paste once → 5 rows appear instantly
 - **Keyboard nav** — Enter to add task, Backspace on empty to delete, Arrow keys to navigate
+- **Auto-redirect** — `/` sends you to `/manage` when no tasks exist
 
 ### Customization
 - **Dark / Light theme** — toggle from the toolbar
