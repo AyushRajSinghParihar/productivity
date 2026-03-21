@@ -111,7 +111,10 @@ export default function ManagePage() {
 
   const handlePaste = (e, id) => {
     const text  = e.clipboardData.getData('text')
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+    const lines = text.split('\n')
+      .map(l => l.trim())
+      .map(l => l.replace(/^[-*]\s*\[.\]\s*/, ''))
+      .filter(Boolean)
     if (lines.length <= 1) return
 
     e.preventDefault()
