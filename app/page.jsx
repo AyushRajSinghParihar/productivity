@@ -93,8 +93,14 @@ export default function Dashboard() {
     for (let i = 0; i < validTasks.length; i++) {
       const task = validTasks[i]
 
-      // Skip completed tasks (manually checked off)
-      if (task.completed) continue
+      // Skip completed tasks but account for their duration in the timeline
+      if (task.completed) {
+        cursor += task.duration * 60
+        if (breaksEnabled && nextNonCompleted(validTasks, i) !== null) {
+          cursor += breakDuration
+        }
+        continue
+      }
 
       const dur = task.duration * 60
 
@@ -141,7 +147,11 @@ export default function Dashboard() {
 
     for (let i = 0; i < validTasks.length; i++) {
       const task = validTasks[i]
-      if (task.completed) continue
+      if (task.completed) {
+        cursor += task.duration * 60
+        if (breaksEnabled) cursor += breakDuration
+        continue
+      }
       const dur = task.duration * 60
       if (elapsed >= cursor + dur) {
         if (!task.completed) {
