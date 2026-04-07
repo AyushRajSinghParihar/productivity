@@ -14,6 +14,14 @@ function formatCountdown(seconds) {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
+function taskFontSize(text) {
+  const len = text?.length || 0
+  if (len <= 10) return 'clamp(2.5rem, 9vw, 8rem)'
+  if (len <= 20) return 'clamp(2rem, 7vw, 6rem)'
+  if (len <= 40) return 'clamp(1.5rem, 5vw, 4rem)'
+  return 'clamp(1.2rem, 4vw, 3rem)'
+}
+
 export default function Dashboard() {
   const [tasks, setTasks]               = useState([])
   const [sessionStart, setSessionStart] = useState(null)
@@ -88,8 +96,16 @@ export default function Dashboard() {
   let isOnBreak     = false
   let allDone       = false
   let currentTaskIdx = -1
+  let waitingToStart = false
+  let waitSeconds    = 0
 
   if (sessionStart && validTasks.length > 0 && effectiveNow) {
+    // Session start is in the future (planned start time)
+    if (sessionStart > effectiveNow) {
+      waitingToStart = true
+      waitSeconds = Math.ceil((sessionStart - effectiveNow) / 1000)
+    }
+
     let elapsed = Math.floor((effectiveNow - sessionStart) / 1000) + skipOffset
     let cursor  = 0
 
@@ -189,7 +205,9 @@ export default function Dashboard() {
   // Update tab title
   useEffect(() => {
     if (!mounted) return
-    if (paused) {
+    if (waitingToStart) {
+      document.title = `Starts in ${formatCountdown(waitSeconds)} | Focus Board`
+    } else if (paused) {
       document.title = 'Paused | Focus Board'
     } else if (manualBreak) {
       document.title = 'Break | Focus Board'
@@ -204,7 +222,7 @@ export default function Dashboard() {
     } else {
       document.title = defaultTitle.current
     }
-  }, [secondsLeft, currentTask, isOnBreak, allDone, mounted, paused, manualBreak])
+  }, [secondsLeft, currentTask, isOnBreak, allDone, mounted, paused, manualBreak, waitingToStart, waitSeconds])
 
   // Save session to history when all done
   useEffect(() => {
@@ -314,6 +332,37 @@ export default function Dashboard() {
     )
   }
 
+  // ── Waiting for planned start time ──────────────────────────────────
+  if (waitingToStart) {
+    const firstTask = validTasks.find(t => !t.completed)
+    const startTime = new Date(sessionStart).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    return (
+      <div className="min-h-screen bg-[var(--bg)] flex flex-col items-center justify-center relative overflow-hidden select-none">
+        <p className="text-[var(--text-dim)] text-sm uppercase tracking-[0.4em] mb-6">Your day starts at {startTime}</p>
+
+        <p
+          className="font-mono font-bold tabular-nums text-[var(--accent)]"
+          style={{ fontSize: 'clamp(3rem, 10vw, 8rem)' }}
+        >
+          {formatCountdown(waitSeconds)}
+        </p>
+
+        {firstTask && (
+          <p className="text-[var(--text-dim)] text-lg uppercase tracking-widest mt-10">
+            First up &rarr; {firstTask.text}
+          </p>
+        )}
+
+        <Link
+          href="/manage"
+          className="absolute bottom-6 right-6 text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm transition-colors"
+        >
+          manage
+        </Link>
+      </div>
+    )
+  }
+
   // ── All done ────────────────────────────────────────────────────────
   if (allDone) {
     return (
@@ -389,7 +438,7 @@ export default function Dashboard() {
 
         <h1
           className="font-black uppercase text-[var(--text)] leading-none text-center px-6 opacity-50"
-          style={{ fontSize: 'clamp(2.5rem, 9vw, 8rem)', wordBreak: 'break-word', maxWidth: '90vw' }}
+          style={{ fontSize: taskFontSize(currentTask.text), wordBreak: 'break-word', maxWidth: '90vw' }}
         >
           {currentTask.text}
         </h1>
@@ -492,7 +541,7 @@ export default function Dashboard() {
       {/* BIG task name */}
       <h1
         className={`font-black uppercase leading-none text-center px-6 ${urgency ? 'text-[var(--danger)]' : 'text-[var(--text)]'}`}
-        style={{ fontSize: 'clamp(2.5rem, 9vw, 8rem)', wordBreak: 'break-word', maxWidth: '90vw' }}
+        style={{ fontSize: taskFontSize(currentTask.text), wordBreak: 'break-word', maxWidth: '90vw' }}
       >
         {currentTask.text}
       </h1>

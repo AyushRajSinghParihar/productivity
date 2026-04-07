@@ -183,7 +183,14 @@ export default function ManagePage() {
     // Reset completed status and skip offset when starting fresh
     const reset = valid.map(t => ({ ...t, completed: false }))
     persist(reset)
-    const ts = Date.now()
+    let ts = Date.now()
+    // If planned start is in the future, use it so dashboard shows a countdown
+    if (plannedStart) {
+      const [h, m] = plannedStart.split(':').map(Number)
+      const planned = new Date()
+      planned.setHours(h, m, 0, 0)
+      if (planned.getTime() > ts) ts = planned.getTime()
+    }
     localStorage.setItem('focusboard-session', String(ts))
     localStorage.setItem('focusboard-skip-offset', '0')
     setSessionStart(ts)
