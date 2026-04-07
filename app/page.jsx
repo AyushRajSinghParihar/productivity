@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { getSettings, getEffectiveDate } from './lib/settings'
 import { playNotificationSound } from './lib/audio'
 import { saveSession } from './lib/history'
+import { checkAndResetDay } from './lib/dayReset'
 import SessionHistory from './components/SessionHistory'
 
 function formatCountdown(seconds) {
@@ -35,6 +36,8 @@ export default function Dashboard() {
     setMounted(true)
     setNow(Date.now())
     setSettings(getSettings())
+
+    checkAndResetDay()
 
     const raw = localStorage.getItem('focusboard-tasks')
     if (raw) setTasks(JSON.parse(raw))

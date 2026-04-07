@@ -19,6 +19,7 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { getSettings, getEffectiveDate } from '../lib/settings'
 import { saveSession } from '../lib/history'
+import { checkAndResetDay, stampToday } from '../lib/dayReset'
 import ConfirmDialog from '../components/ConfirmDialog'
 import TimeInput from '../components/TimeInput'
 
@@ -75,6 +76,7 @@ export default function ManagePage() {
 
   useEffect(() => {
     setMounted(true)
+    checkAndResetDay()
     const raw  = localStorage.getItem('focusboard-tasks')
     const sess = localStorage.getItem('focusboard-session')
     if (raw) {
@@ -101,6 +103,7 @@ export default function ManagePage() {
   const persist = useCallback((next) => {
     setTasks(next)
     localStorage.setItem('focusboard-tasks', JSON.stringify(next))
+    stampToday()
   }, [])
 
   const updateField = (id, field, value) =>
