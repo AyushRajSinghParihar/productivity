@@ -184,9 +184,11 @@ export default function ManagePage() {
     const reset = valid.map(t => ({ ...t, completed: false }))
     persist(reset)
     let ts = Date.now()
-    // If planned start is in the future, use it so dashboard shows a countdown
-    if (plannedStart) {
-      const [h, m] = plannedStart.split(':').map(Number)
+    // Read from localStorage as fallback — handles blur+click race when user
+    // types a time and immediately clicks Start Session before state flushes
+    const effectivePlanned = plannedStart || localStorage.getItem('focusboard-planned-start')
+    if (effectivePlanned) {
+      const [h, m] = effectivePlanned.split(':').map(Number)
       const planned = new Date()
       planned.setHours(h, m, 0, 0)
       if (planned.getTime() > ts) ts = planned.getTime()
@@ -298,7 +300,7 @@ export default function ManagePage() {
         </button>
 
         {/* Divider + summary */}
-        <div className="mt-10 pt-5 border-t border-[var(--border)] flex items-center justify-between">
+        <div className="mt-10 pt-5 border-t border-[var(--border)] flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="text-[var(--text-muted)] text-sm space-y-0.5">
             <p>{validTasks.length} task{validTasks.length !== 1 ? 's' : ''} &middot; {totalMin} min ({totalHrs}h)</p>
             {sessionStart && (
@@ -424,22 +426,24 @@ function SortableTask({ task, idx, isFirst, isLast, startMs, sessionActive, onPl
       />
 
       {/* time range + duration + controls (visible on hover) */}
-      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
-        {isFirst && !sessionActive ? (
+      <div className="flex items-center gap-2 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
+        <span className="hidden sm:contents">
+          {isFirst && !sessionActive ? (
+            <TimeInput
+              value={startStr}
+              onChange={onPlannedStartChange}
+              className="w-16 bg-[var(--bg-hover)] border border-[var(--border)] rounded px-1.5 py-1 text-xs text-center outline-none focus:border-[var(--text-muted)] text-[var(--text)]"
+            />
+          ) : (
+            <span className="text-[var(--text-muted)] text-xs tabular-nums">{startStr}</span>
+          )}
+          <span className="text-[var(--text-dim)] text-xs">&rarr;</span>
           <TimeInput
-            value={startStr}
-            onChange={onPlannedStartChange}
+            value={endStr}
+            onChange={handleEndChange}
             className="w-16 bg-[var(--bg-hover)] border border-[var(--border)] rounded px-1.5 py-1 text-xs text-center outline-none focus:border-[var(--text-muted)] text-[var(--text)]"
           />
-        ) : (
-          <span className="text-[var(--text-muted)] text-xs tabular-nums">{startStr}</span>
-        )}
-        <span className="text-[var(--text-dim)] text-xs">&rarr;</span>
-        <TimeInput
-          value={endStr}
-          onChange={handleEndChange}
-          className="w-16 bg-[var(--bg-hover)] border border-[var(--border)] rounded px-1.5 py-1 text-xs text-center outline-none focus:border-[var(--text-muted)] text-[var(--text)]"
-        />
+        </span>
 
         <input
           type="number"

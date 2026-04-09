@@ -22,6 +22,32 @@ function taskFontSize(text) {
   return 'clamp(1.2rem, 4vw, 3rem)'
 }
 
+function FullscreenBtn({ isFullscreen, onToggle }) {
+  return (
+    <button
+      onClick={onToggle}
+      className="absolute bottom-6 left-6 text-[var(--text-dim)] hover:text-[var(--text-muted)] transition-colors"
+      title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+    >
+      {isFullscreen ? (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="4 14 10 14 10 20" />
+          <polyline points="20 10 14 10 14 4" />
+          <line x1="14" y1="10" x2="21" y2="3" />
+          <line x1="3" y1="21" x2="10" y2="14" />
+        </svg>
+      ) : (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="15 3 21 3 21 9" />
+          <polyline points="9 21 3 21 3 15" />
+          <line x1="21" y1="3" x2="14" y2="10" />
+          <line x1="3" y1="21" x2="10" y2="14" />
+        </svg>
+      )}
+    </button>
+  )
+}
+
 export default function Dashboard() {
   const [tasks, setTasks]               = useState([])
   const [sessionStart, setSessionStart] = useState(null)
@@ -33,6 +59,7 @@ export default function Dashboard() {
   const [mounted, setMounted]           = useState(false)
   const [flashing, setFlashing]         = useState(false)
   const [settings, setSettings]         = useState(null)
+  const [isFullscreen, setIsFullscreen] = useState(false)
 
   const router = useRouter()
   const notifiedTaskRef = useRef(null)
@@ -75,9 +102,13 @@ export default function Dashboard() {
 
     const tick = setInterval(() => setNow(Date.now()), 1000)
 
+    const onFs = () => setIsFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', onFs)
+
     return () => {
       clearInterval(tick)
       clearInterval(poll)
+      document.removeEventListener('fullscreenchange', onFs)
       document.title = defaultTitle.current
     }
   }, [])
@@ -293,6 +324,14 @@ export default function Dashboard() {
     handlePause()
   }, [handlePause])
 
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen()
+    } else {
+      document.documentElement.requestFullscreen()
+    }
+  }, [])
+
   if (!mounted) return null
 
   // ── No session yet ──────────────────────────────────────────────────
@@ -348,11 +387,12 @@ export default function Dashboard() {
         </p>
 
         {firstTask && (
-          <p className="text-[var(--text-dim)] text-lg uppercase tracking-widest mt-10">
+          <p className="text-[var(--text-dim)] text-base sm:text-lg uppercase tracking-widest mt-10 max-w-[90vw] truncate text-center px-4">
             First up &rarr; {firstTask.text}
           </p>
         )}
 
+        <FullscreenBtn isFullscreen={isFullscreen} onToggle={toggleFullscreen} />
         <Link
           href="/manage"
           className="absolute bottom-6 right-6 text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm transition-colors"
@@ -401,7 +441,7 @@ export default function Dashboard() {
         <p className="text-[var(--text-dim)] text-lg mt-8">Timer paused &mdash; resume when ready</p>
 
         {currentTask && (
-          <p className="text-[var(--text-dim)] text-lg uppercase tracking-widest mt-6">
+          <p className="text-[var(--text-dim)] text-base sm:text-lg uppercase tracking-widest mt-6 max-w-[90vw] truncate text-center px-4">
             Up next &rarr; {currentTask.text}
           </p>
         )}
@@ -413,6 +453,7 @@ export default function Dashboard() {
           End Break
         </button>
 
+        <FullscreenBtn isFullscreen={isFullscreen} onToggle={toggleFullscreen} />
         <Link
           href="/manage"
           className="absolute bottom-6 right-6 text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm transition-colors"
@@ -457,6 +498,7 @@ export default function Dashboard() {
           Resume
         </button>
 
+        <FullscreenBtn isFullscreen={isFullscreen} onToggle={toggleFullscreen} />
         <Link
           href="/manage"
           className="absolute bottom-6 right-6 text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm transition-colors"
@@ -495,7 +537,7 @@ export default function Dashboard() {
         </p>
 
         {currentTask && (
-          <p className="text-[var(--text-dim)] text-lg uppercase tracking-widest mt-10">
+          <p className="text-[var(--text-dim)] text-base sm:text-lg uppercase tracking-widest mt-10 max-w-[90vw] truncate text-center px-4">
             Next &rarr; {currentTask.text}
           </p>
         )}
@@ -507,6 +549,7 @@ export default function Dashboard() {
           Skip break
         </button>
 
+        <FullscreenBtn isFullscreen={isFullscreen} onToggle={toggleFullscreen} />
         <Link
           href="/manage"
           className="absolute bottom-6 right-6 text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm transition-colors"
@@ -555,7 +598,7 @@ export default function Dashboard() {
       </p>
 
       {/* action buttons */}
-      <div className="flex items-center gap-3 mt-10">
+      <div className="flex items-center justify-center gap-3 mt-10 flex-wrap px-4">
         <button
           onClick={handlePause}
           className="text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm border border-[var(--border)] hover:border-[var(--border-hover)] px-6 py-2 rounded-full transition-colors"
@@ -578,12 +621,13 @@ export default function Dashboard() {
 
       {/* next task */}
       {nextTask && (
-        <p className="text-[var(--text-dim)] text-lg uppercase tracking-widest mt-6">
+        <p className="text-[var(--text-dim)] text-base sm:text-lg uppercase tracking-widest mt-6 max-w-[90vw] truncate text-center px-4">
           Next &rarr; {nextTask.text}
         </p>
       )}
 
-      {/* manage link */}
+      {/* fullscreen + manage */}
+      <FullscreenBtn isFullscreen={isFullscreen} onToggle={toggleFullscreen} />
       <Link
         href="/manage"
         className="absolute bottom-6 right-6 text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm transition-colors"

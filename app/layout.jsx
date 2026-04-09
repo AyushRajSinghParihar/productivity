@@ -7,6 +7,11 @@ export const metadata = {
   icons: { icon: '/favicon.svg' },
 }
 
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+}
+
 const themeScript = `
   (function() {
     try {
