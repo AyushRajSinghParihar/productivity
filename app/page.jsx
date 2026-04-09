@@ -23,6 +23,8 @@ function taskFontSize(text) {
 }
 
 function FullscreenBtn({ isFullscreen, onToggle }) {
+  // Hide on devices that don't support fullscreen (e.g. iOS Safari)
+  if (typeof document !== 'undefined' && !document.documentElement.requestFullscreen) return null
   return (
     <button
       onClick={onToggle}

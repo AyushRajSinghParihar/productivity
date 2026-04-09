@@ -85,7 +85,17 @@ export default function ManagePage() {
     }
     if (sess) setSessionStart(Number(sess))
     const ps = localStorage.getItem('focusboard-planned-start')
-    if (ps) setPlannedStart(ps)
+    if (ps) {
+      setPlannedStart(ps)
+    } else if (!sess) {
+      // Auto-persist the displayed start time so it's available to startSession.
+      // Without this, the user sees a start time but plannedStart is null.
+      const loaded = raw ? JSON.parse(raw) : [blankTask()]
+      const starts = computeStartTimes(loaded, null, null)
+      const defaultStart = msToTimeStr(starts[0])
+      setPlannedStart(defaultStart)
+      localStorage.setItem('focusboard-planned-start', defaultStart)
+    }
   }, [])
 
   // Cmd/Ctrl+Enter to start session
@@ -174,7 +184,16 @@ export default function ManagePage() {
 
   const deleteTask = (id) => {
     const next = tasks.filter(t => t.id !== id)
-    persist(next.length ? next : [blankTask()])
+    const result = next.length ? next : [blankTask()]
+    persist(result)
+    // Clear session if no valid tasks remain — unlocks the start time input
+    if (!result.some(t => t.text?.trim()) && sessionStart) {
+      localStorage.removeItem('focusboard-session')
+      localStorage.removeItem('focusboard-skip-offset')
+      localStorage.removeItem('focusboard-paused-at')
+      localStorage.removeItem('focusboard-manual-break')
+      setSessionStart(null)
+    }
   }
 
   const startSession = () => {
@@ -225,7 +244,9 @@ export default function ManagePage() {
     }
     localStorage.removeItem('focusboard-session')
     localStorage.removeItem('focusboard-skip-offset')
+    localStorage.removeItem('focusboard-planned-start')
     setSessionStart(null)
+    setPlannedStart(null)
     setConfirmReset(false)
   }
 
@@ -427,17 +448,17 @@ function SortableTask({ task, idx, isFirst, isLast, startMs, sessionActive, onPl
 
       {/* time range + duration + controls (visible on hover) */}
       <div className="flex items-center gap-2 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
+        {isFirst && !sessionActive ? (
+          <TimeInput
+            value={startStr}
+            onChange={onPlannedStartChange}
+            className="w-16 bg-[var(--bg-hover)] border border-[var(--border)] rounded px-1.5 py-1 text-xs text-center outline-none focus:border-[var(--text-muted)] text-[var(--text)]"
+          />
+        ) : (
+          <span className="hidden sm:inline text-[var(--text-muted)] text-xs tabular-nums">{startStr}</span>
+        )}
+        <span className="hidden sm:inline text-[var(--text-dim)] text-xs">&rarr;</span>
         <span className="hidden sm:contents">
-          {isFirst && !sessionActive ? (
-            <TimeInput
-              value={startStr}
-              onChange={onPlannedStartChange}
-              className="w-16 bg-[var(--bg-hover)] border border-[var(--border)] rounded px-1.5 py-1 text-xs text-center outline-none focus:border-[var(--text-muted)] text-[var(--text)]"
-            />
-          ) : (
-            <span className="text-[var(--text-muted)] text-xs tabular-nums">{startStr}</span>
-          )}
-          <span className="text-[var(--text-dim)] text-xs">&rarr;</span>
           <TimeInput
             value={endStr}
             onChange={handleEndChange}
