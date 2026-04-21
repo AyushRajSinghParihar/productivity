@@ -48,20 +48,31 @@ export default function SessionHistory() {
                       {formatTime(session.startTime)} &mdash; {formatTime(session.endTime)}
                     </span>
                     <span className="text-[var(--text-muted)] text-xs">
-                      {session.completedTasks}/{session.totalTasks} tasks &middot; {session.totalMinutes} min
+                      {session.completedTasks}/{session.totalTasks} tasks &middot; {session.totalMinutes} planned min
                     </span>
                   </div>
+                  {(session.focusSeconds || session.breakSeconds || session.pauseSeconds || session.skippedTasks) ? (
+                    <p className="text-[var(--text-dim)] text-[11px] mb-2">
+                      {session.focusSeconds ? `${formatDuration(session.focusSeconds)} focus` : '0m focus'}
+                      {session.breakSeconds ? ` \u00b7 ${formatDuration(session.breakSeconds)} breaks` : ''}
+                      {session.pauseSeconds ? ` \u00b7 ${formatDuration(session.pauseSeconds)} paused` : ''}
+                      {session.skippedTasks ? ` \u00b7 ${session.skippedTasks} skipped` : ''}
+                    </p>
+                  ) : null}
                   <div className="flex flex-wrap gap-1.5">
                     {session.tasks.map((t, i) => (
                       <span
                         key={i}
                         className={`text-xs px-2 py-0.5 rounded-full border ${
-                          t.completed
+                          t.skipped
+                            ? 'border-[var(--warning,#d97706)]/30 text-[var(--warning,#d97706)]'
+                            : t.completed
                             ? 'border-[var(--success)]/30 text-[var(--success)]'
                             : 'border-[var(--border)] text-[var(--text-dim)]'
                         }`}
                       >
-                        {t.completed ? '\u2713 ' : ''}{t.text}
+                        {t.skipped ? '\u2192 ' : t.completed ? '\u2713 ' : ''}
+                        {t.text}
                       </span>
                     ))}
                   </div>
@@ -98,4 +109,14 @@ function formatTime(timestamp) {
   } catch {
     return ''
   }
+}
+
+function formatDuration(seconds) {
+  const totalMinutes = Math.max(0, Math.round(seconds / 60))
+  if (totalMinutes >= 60) {
+    const hours = Math.floor(totalMinutes / 60)
+    const minutes = totalMinutes % 60
+    return minutes ? `${hours}h ${minutes}m` : `${hours}h`
+  }
+  return `${totalMinutes}m`
 }

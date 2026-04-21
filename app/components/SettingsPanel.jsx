@@ -9,6 +9,7 @@ const ALL_KEYS = [
   'focusboard-skip-offset',
   'focusboard-settings',
   'focusboard-history',
+  'focusboard-runtime',
   'focusboard-planned-start',
   'focusboard-paused-at',
   'focusboard-manual-break',
