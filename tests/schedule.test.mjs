@@ -94,3 +94,14 @@ test('cross-midnight: a far-backward end pin is treated as next day', () => {
   assert.equal(hhmm(ends[0]), '06:00')                 // wall-clock 06:00 next day
   assert.equal((ends[0] - starts[0]) / 3600000, 7)     // 7 hours
 })
+
+test('end-anchored row after a break row holds its absolute end in the preview', () => {
+  const tasks = [
+    { id: 'a', text: 'A', duration: 30 },
+    { id: 'br', type: 'break', text: 'Tea', duration: 10 },
+    { id: 'b', text: 'B', anchor: 'end', endMin: 18 * 60 },
+  ]
+  const { ends } = computeStartTimes(tasks, { plannedStartMode: 'fixed', plannedStart: '16:00' }, localMs(8, 0))
+  assert.equal(hhmm(ends[1]), '16:40') // break runs 16:30 -> 16:40
+  assert.equal(hhmm(ends[2]), '18:00') // end pin held across the break
+})

@@ -1,4 +1,4 @@
-import { minutesSinceMidnightOf, anchoredDurationMinutes } from './runtime.mjs'
+import { minutesSinceMidnightOf, anchoredDurationMinutes, isBreakItem } from './runtime.mjs'
 
 // Pure, clock-injectable planner scheduling math. Kept free of React/Next so it
 // runs under `node --test` (see tests/schedule.test.mjs). manage/page.jsx is a
@@ -73,11 +73,15 @@ export function computeStartTimes(
     ends.push(end)
     cursor = end
 
-    const hasFutureValidTask =
-      !!task.text?.trim() &&
-      tasks.slice(index + 1).some(candidate => candidate.text?.trim())
+    // Settings auto-break only falls between two real tasks — never after a
+    // break row or right before a planned break (mirrors runtime startAutoBreak).
+    const currentIsRealTask = !isBreakItem(task) && !!task.text?.trim()
+    const nextIsBreak = isBreakItem(tasks[index + 1])
+    const hasFutureRealTask = tasks
+      .slice(index + 1)
+      .some(candidate => !isBreakItem(candidate) && candidate.text?.trim())
 
-    if (breaksEnabled && hasFutureValidTask) {
+    if (breaksEnabled && currentIsRealTask && !nextIsBreak && hasFutureRealTask) {
       cursor += breakDurationMinutes * 60 * 1000
     }
   }

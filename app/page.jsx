@@ -140,6 +140,7 @@ export default function Dashboard() {
   const paused = view.paused
   const manualBreak = view.manualBreak
   const isOnBreak = view.isOnBreak
+  const isPlannedBreak = view.isPlannedBreak
   const allDone = view.allDone
 
   useEffect(() => {
@@ -215,6 +216,11 @@ export default function Dashboard() {
       return
     }
 
+    if (isPlannedBreak) {
+      document.title = `Break ${formatCountdown(secondsLeft)} | Focus Board`
+      return
+    }
+
     if (currentTask && secondsLeft > 0) {
       document.title = `${formatCountdown(secondsLeft)} \u2014 ${currentTask.text} | Focus Board`
       return
@@ -226,7 +232,7 @@ export default function Dashboard() {
     }
 
     document.title = defaultTitle.current
-  }, [mounted, waitingToStart, secondsLeft, paused, manualBreak, isOnBreak, currentTask, allDone])
+  }, [mounted, waitingToStart, secondsLeft, paused, manualBreak, isOnBreak, isPlannedBreak, currentTask, allDone])
 
   const handleRuntimeAction = useCallback((action) => {
     if (!runtime) return
@@ -443,6 +449,59 @@ export default function Dashboard() {
 
         <button
           onClick={() => handleRuntimeAction({ type: 'skip_break' })}
+          className="mt-8 text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm border border-[var(--border)] hover:border-[var(--border-hover)] px-6 py-2 rounded-full transition-colors"
+        >
+          Skip break
+        </button>
+
+        <FullscreenBtn isFullscreen={isFullscreen} onToggle={toggleFullscreen} />
+        <Link
+          href="/manage"
+          className="absolute bottom-6 right-6 text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm transition-colors"
+        >
+          manage
+        </Link>
+      </div>
+    )
+  }
+
+  if (isPlannedBreak && currentTask) {
+    const breakDuration = currentTask.plannedDurationSeconds
+    const progress = ((breakDuration - secondsLeft) / breakDuration) * 100
+
+    return (
+      <div className={`min-h-screen bg-[var(--bg)] flex flex-col items-center justify-center relative overflow-hidden select-none ${flashing ? 'flash-notification' : ''}`}>
+        <div className="absolute top-0 left-0 h-1 bg-[var(--bg-hover)] w-full">
+          <div
+            className="h-full transition-all duration-1000 bg-[var(--success)]"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+
+        <p className="text-[var(--success)] text-sm uppercase tracking-[0.4em] mb-6">Break Time</p>
+
+        <h1
+          className="font-black uppercase text-[var(--success)] leading-none text-center px-6"
+          style={{ fontSize: taskFontSize(currentTask.text), wordBreak: 'break-word', maxWidth: '90vw' }}
+        >
+          {currentTask.text || 'RELAX'}
+        </h1>
+
+        <p
+          className="font-mono font-bold mt-8 tabular-nums text-[var(--success)]"
+          style={{ fontSize: 'clamp(2rem, 6vw, 4.5rem)' }}
+        >
+          {formatCountdown(secondsLeft)}
+        </p>
+
+        {nextTask && (
+          <p className="text-[var(--text-dim)] text-base sm:text-lg uppercase tracking-widest mt-10 max-w-[90vw] truncate text-center px-4">
+            Next &rarr; {nextTask.text}
+          </p>
+        )}
+
+        <button
+          onClick={() => handleRuntimeAction({ type: 'skip_planned_break' })}
           className="mt-8 text-[var(--text-dim)] hover:text-[var(--text-muted)] text-sm border border-[var(--border)] hover:border-[var(--border-hover)] px-6 py-2 rounded-full transition-colors"
         >
           Skip break

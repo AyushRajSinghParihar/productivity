@@ -22,6 +22,14 @@ function createTasks() {
   ]
 }
 
+function createTasksWithBreak() {
+  return [
+    { id: 'task-a', text: 'Task A', duration: 60, completed: false },
+    { id: 'break-1', type: 'break', text: 'Lunch', duration: 10, completed: false },
+    { id: 'task-b', text: 'Task B', duration: 30, completed: false },
+  ]
+}
+
 function createMockStorage(initial = {}) {
   const store = new Map(Object.entries(initial))
   return {
@@ -335,4 +343,163 @@ test('full path: a planner end pin survives startSession when started late (auto
 
   const endAt = runtime.actualStartAt + runtime.tasks[0].plannedDurationSeconds * 1000
   assert.equal(endAt, localMs(18, 0))
+})
+
+test('a planned break runs as its own countdown and suppresses the adjacent auto-break', () => {
+  const base = Date.parse('2026-04-21T13:00:00Z')
+  const runtime = createRuntimeState({
+    tasks: createTasksWithBreak(),
+    plannedStartAt: base,
+    now: base,
+    settings: { breaksEnabled: true, breakDuration: 5 },
+  })
+
+  assert.equal(runtime.mode, 'task')
+  assert.equal(runtime.tasks.length, 3)
+
+  // After Task A's 60 minutes we enter the PLANNED break (10m), not a 5m auto-break.
+  const atBreak = advanceRuntime(runtime, base + 60 * 60 * 1000)
+  const breakView = deriveRuntimeView(atBreak, base + 60 * 60 * 1000)
+  assert.equal(breakView.mode, 'planned_break')
+  assert.equal(breakView.isPlannedBreak, true)
+  assert.equal(breakView.currentTask.text, 'Lunch')
+  assert.equal(breakView.secondsLeft, 10 * 60)
+  assert.equal(breakView.nextTask.text, 'Task B')
+  assert.equal(atBreak.segments.some(segment => segment.type === 'auto_break'), false)
+
+  // After the 10-minute break, Task B is active and the break is completed.
+  const atTaskB = advanceRuntime(atBreak, base + 70 * 60 * 1000)
+  const taskBView = deriveRuntimeView(atTaskB, base + 70 * 60 * 1000)
+  assert.equal(taskBView.mode, 'task')
+  assert.equal(taskBView.currentTask.text, 'Task B')
+  assert.equal(atTaskB.tasks.find(task => task.id === 'break-1').status, 'completed')
+})
+
+test('a break as the first item waits, then runs before the first task', () => {
+  const now = Date.parse('2026-04-21T12:45:00Z')
+  const plannedStartAt = Date.parse('2026-04-21T13:00:00Z')
+  const runtime = createRuntimeState({
+    tasks: [
+      { id: 'break-0', type: 'break', text: 'Warm up', duration: 10, completed: false },
+      { id: 'task-a', text: 'Task A', duration: 60, completed: false },
+    ],
+    plannedStartAt,
+    now,
+    settings: { breaksEnabled: false },
+  })
+
+  assert.equal(deriveRuntimeView(runtime, now).mode, 'waiting')
+
+  const atBreak = advanceRuntime(runtime, plannedStartAt)
+  const breakView = deriveRuntimeView(atBreak, plannedStartAt)
+  assert.equal(breakView.mode, 'planned_break')
+  assert.equal(breakView.currentTask.text, 'Warm up')
+  assert.equal(breakView.secondsLeft, 10 * 60)
+  assert.equal(breakView.nextTask.text, 'Task A')
+
+  const atTaskA = advanceRuntime(atBreak, plannedStartAt + 10 * 60 * 1000)
+  assert.equal(deriveRuntimeView(atTaskA, plannedStartAt + 10 * 60 * 1000).currentTask.text, 'Task A')
+})
+
+test('skip_planned_break ends the break and starts the next task without touching it', () => {
+  const base = Date.parse('2026-04-21T13:00:00Z')
+  const runtime = createRuntimeState({
+    tasks: createTasksWithBreak(),
+    plannedStartAt: base,
+    now: base,
+    settings: { breaksEnabled: false },
+  })
+
+  const atBreak = advanceRuntime(runtime, base + 60 * 60 * 1000)
+  assert.equal(atBreak.mode, 'planned_break')
+
+  const skipped = applyRuntimeAction(atBreak, { type: 'skip_planned_break' }, base + 62 * 60 * 1000)
+  const view = deriveRuntimeView(skipped, base + 62 * 60 * 1000)
+  assert.equal(view.mode, 'task')
+  assert.equal(view.currentTask.text, 'Task B')
+  assert.equal(skipped.tasks.find(task => task.id === 'break-1').status, 'completed')
+  assert.equal(skipped.tasks.find(task => task.id === 'task-b').status, 'active')
+})
+
+test('finalizeHistorySession counts planned-break time as break time and excludes breaks from task stats', () => {
+  const base = Date.parse('2026-04-21T13:00:00Z')
+  const runtime = createRuntimeState({
+    tasks: createTasksWithBreak(),
+    plannedStartAt: base,
+    now: base,
+    settings: { breaksEnabled: false },
+  })
+
+  // Run the whole plan: Task A (60m) + Break (10m) + Task B (30m) = 100m.
+  const finished = advanceRuntime(runtime, base + 100 * 60 * 1000)
+  assert.equal(finished.mode, 'done')
+
+  const history = finalizeHistorySession(finished, { now: finished.actualEndAt, date: '2026-04-21' })
+  assert.equal(history.breakSeconds, 10 * 60)
+  assert.equal(history.totalTasks, 2)
+  assert.equal(history.completedTasks, 2)
+  assert.equal(history.totalMinutes, 90)
+  assert.equal(history.tasks.length, 2)
+  assert.equal(history.tasks.some(task => task.text === 'Lunch'), false)
+})
+
+test('advancing far past the end of a plan with a break terminates at done (no infinite loop)', () => {
+  const base = Date.parse('2026-04-21T13:00:00Z')
+  const runtime = createRuntimeState({
+    tasks: createTasksWithBreak(),
+    plannedStartAt: base,
+    now: base,
+    settings: { breaksEnabled: true, breakDuration: 5 },
+  })
+
+  const finished = advanceRuntime(runtime, base + 999 * 60 * 60 * 1000)
+  assert.equal(finished.mode, 'done')
+})
+
+test('predicted end time stays finite for a plan containing a break', () => {
+  const base = Date.parse('2026-04-21T13:00:00Z')
+  const runtime = createRuntimeState({
+    tasks: createTasksWithBreak(),
+    plannedStartAt: base,
+    now: base,
+    settings: { breaksEnabled: false },
+  })
+
+  const view = deriveRuntimeView(runtime, base)
+  // Task A (60) + Break (10) + Task B (30) = 100 minutes after start.
+  assert.equal(view.predictedEndAt, base + 100 * 60 * 1000)
+})
+
+// --- Anchors × planned breaks interaction --------------------------------
+
+test('end-anchored task after a planned break keeps its end and stacks no double rest', () => {
+  const tasks = [
+    { id: 'a', text: 'A', duration: 30, completed: false },
+    { id: 'br', type: 'break', text: 'Tea', duration: 10, completed: false },
+    { id: 'b', text: 'B', anchor: 'end', endMin: 18 * 60, completed: false },
+  ]
+  // breaks enabled, but the planned break suppresses any auto-break around it:
+  // A 16:00-16:30, Break 16:30-16:40, B starts 16:40 -> 80 min to 18:00.
+  const runtime = createRuntimeState({
+    tasks,
+    plannedStartAt: localMs(16, 0),
+    now: localMs(16, 0),
+    settings: { breaksEnabled: true, breakDuration: 5 },
+  })
+  assert.equal(runtime.tasks.find(t => t.id === 'b').plannedDurationSeconds, 80 * 60)
+})
+
+test('end-anchored task after a real task accounts for the intervening auto-break', () => {
+  const tasks = [
+    { id: 'a', text: 'A', duration: 30, completed: false },
+    { id: 'b', text: 'B', anchor: 'end', endMin: 18 * 60, completed: false },
+  ]
+  // A 30m + 5m auto-break between two real tasks -> B starts 16:35 -> 85 min to 18:00.
+  const runtime = createRuntimeState({
+    tasks,
+    plannedStartAt: localMs(16, 0),
+    now: localMs(16, 0),
+    settings: { breaksEnabled: true, breakDuration: 5 },
+  })
+  assert.equal(runtime.tasks.find(t => t.id === 'b').plannedDurationSeconds, 85 * 60)
 })

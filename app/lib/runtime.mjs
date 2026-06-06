@@ -21,12 +21,15 @@ function createId(prefix = 'runtime') {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
+export const isBreakItem = (item) => item?.type === 'break'
+
 function toValidTasks(tasks = []) {
   return tasks
-    .filter(task => task?.text?.trim())
+    .filter(task => isBreakItem(task) || task?.text?.trim())
     .map((task, index) => ({
       id: task.id,
-      text: task.text.trim(),
+      type: isBreakItem(task) ? 'break' : 'task',
+      text: isBreakItem(task) ? (task.text?.trim() || 'Break') : task.text.trim(),
       order: index,
       plannedDurationSeconds: Math.max(60, Number(task.duration || 0) * 60),
       anchor: task.anchor === 'end' ? 'end' : 'duration',
@@ -72,7 +75,11 @@ function applyAnchors(snapshot, effectiveStartAt, breakSettings) {
       task.overdue = overdue
     }
     cursor += task.plannedDurationSeconds * 1000
-    if (breakSettings.enabled && i < snapshot.length - 1) {
+    // Mirror runtime auto-break insertion (see startAutoBreak): a settings
+    // auto-break only falls between two real tasks — never after a break row or
+    // right before a planned break (which would stack two rests).
+    const next = snapshot[i + 1]
+    if (breakSettings.enabled && !isBreakItem(task) && next && !isBreakItem(next)) {
       cursor += breakSettings.durationSeconds * 1000
     }
   }
@@ -139,14 +146,40 @@ function startTask(runtime, taskId, startedAt, remainingSeconds = null) {
   return runtime
 }
 
+function startPlannedBreak(runtime, breakTask, startedAt) {
+  runtime.mode = 'planned_break'
+  runtime.modeStartedAt = startedAt
+  runtime.currentTaskId = breakTask.id
+  runtime.remainingBreakSeconds = breakTask.plannedDurationSeconds
+  runtime.remainingTaskSeconds = 0
+  breakTask.status = 'active'
+  if (!breakTask.actualStartAt) breakTask.actualStartAt = startedAt
+  if (!runtime.actualStartAt || startedAt < runtime.actualStartAt) {
+    runtime.actualStartAt = startedAt
+  }
+  openSegment(runtime, 'planned_break', startedAt, breakTask.id)
+  return runtime
+}
+
+function startItem(runtime, item, startedAt) {
+  if (!item) return enterDone(runtime, startedAt)
+  if (isBreakItem(item)) return startPlannedBreak(runtime, item, startedAt)
+  return startTask(runtime, item.id, startedAt, item.plannedDurationSeconds)
+}
+
 function startNextPendingTask(runtime, startedAt) {
   const nextTask = getPendingTask(runtime)
   if (!nextTask) return enterDone(runtime, startedAt)
-  return startTask(runtime, nextTask.id, startedAt, nextTask.plannedDurationSeconds)
+  return startItem(runtime, nextTask, startedAt)
 }
 
 function startAutoBreak(runtime, startedAt) {
   const nextTask = getPendingTask(runtime)
+  // A planned break is an explicit item; run it directly and skip the uniform
+  // auto-break so we never stack two breaks back to back.
+  if (nextTask && isBreakItem(nextTask)) {
+    return startItem(runtime, nextTask, startedAt)
+  }
   if (!runtime.breakSettings.enabled || !nextTask) {
     return startNextPendingTask(runtime, startedAt)
   }
@@ -221,7 +254,8 @@ function skipPendingTask(runtime, taskId, endedAt) {
 function finishWaitingTasksIfNeeded(runtime, endedAt) {
   if (runtime.mode !== 'waiting') return runtime
   if (endedAt < runtime.plannedStartAt) return runtime
-  return startTask(runtime, runtime.currentTaskId, runtime.plannedStartAt)
+  const current = findTask(runtime, runtime.currentTaskId)
+  return startItem(runtime, current, runtime.plannedStartAt)
 }
 
 function advanceTask(runtime, now) {
@@ -248,6 +282,23 @@ function advanceTask(runtime, now) {
       continue
     }
 
+    if (runtime.mode === 'planned_break') {
+      const breakEndsAt = runtime.modeStartedAt + runtime.remainingBreakSeconds * 1000
+      if (now < breakEndsAt) return runtime
+      closeSegment(runtime, 'planned_break', breakEndsAt)
+      // Mark the break completed BEFORE advancing — otherwise getPendingTask
+      // re-selects it and this while-loop spins forever.
+      const breakTask = findTask(runtime, runtime.currentTaskId)
+      if (breakTask) {
+        breakTask.status = 'completed'
+        breakTask.actualEndAt = breakEndsAt
+      }
+      runtime.remainingBreakSeconds = 0
+      runtime.currentTaskId = null
+      startNextPendingTask(runtime, breakEndsAt)
+      continue
+    }
+
     return runtime
   }
 }
@@ -260,7 +311,7 @@ function getModeSecondsLeft(runtime, now) {
     const elapsedSeconds = Math.max(0, Math.floor((now - runtime.modeStartedAt) / 1000))
     return Math.max(0, runtime.remainingTaskSeconds - elapsedSeconds)
   }
-  if (runtime.mode === 'auto_break') {
+  if (runtime.mode === 'auto_break' || runtime.mode === 'planned_break') {
     const elapsedSeconds = Math.max(0, Math.floor((now - runtime.modeStartedAt) / 1000))
     return Math.max(0, runtime.remainingBreakSeconds - elapsedSeconds)
   }
@@ -285,6 +336,8 @@ export function createRuntimeState({ tasks, plannedStartAt, now = Date.now(), se
   }
   applyAnchors(snapshot, effectiveStartAt, breakSettings)
   const firstTask = snapshot[0]
+  const firstIsBreak = isBreakItem(firstTask)
+  const isWaiting = effectiveStartAt > now
   const runtime = {
     version: RUNTIME_VERSION,
     id: createId('focus'),
@@ -294,17 +347,17 @@ export function createRuntimeState({ tasks, plannedStartAt, now = Date.now(), se
     actualEndAt: null,
     archivedAt: null,
     breakSettings,
-    mode: effectiveStartAt > now ? 'waiting' : 'task',
-    modeStartedAt: effectiveStartAt > now ? now : effectiveStartAt,
+    mode: isWaiting ? 'waiting' : (firstIsBreak ? 'planned_break' : 'task'),
+    modeStartedAt: isWaiting ? now : effectiveStartAt,
     currentTaskId: firstTask.id,
-    remainingTaskSeconds: firstTask.plannedDurationSeconds,
-    remainingBreakSeconds: 0,
+    remainingTaskSeconds: firstIsBreak ? 0 : firstTask.plannedDurationSeconds,
+    remainingBreakSeconds: firstIsBreak ? firstTask.plannedDurationSeconds : 0,
     tasks: snapshot,
     segments: [],
   }
 
-  if (runtime.mode === 'task') {
-    startTask(runtime, firstTask.id, effectiveStartAt, firstTask.plannedDurationSeconds)
+  if (!isWaiting) {
+    startItem(runtime, firstTask, effectiveStartAt)
   }
 
   return runtime
@@ -359,6 +412,19 @@ export function applyRuntimeAction(runtime, action, now = Date.now()) {
     return startNextPendingTask(next, now)
   }
 
+  if (action.type === 'skip_planned_break') {
+    if (next.mode !== 'planned_break') return next
+    closeSegment(next, 'planned_break', now)
+    const breakTask = next.currentTaskId ? findTask(next, next.currentTaskId) : null
+    if (breakTask) {
+      breakTask.status = 'completed'
+      breakTask.actualEndAt = now
+    }
+    next.remainingBreakSeconds = 0
+    next.currentTaskId = null
+    return startNextPendingTask(next, now)
+  }
+
   if (action.type === 'skip_task') {
     if (!next.currentTaskId) return next
     if (!['task', 'paused', 'manual_break'].includes(next.mode)) return next
@@ -374,6 +440,7 @@ export function applyRuntimeAction(runtime, action, now = Date.now()) {
   if (action.type === 'toggle_task_from_planner') {
     const task = findTask(next, action.taskId)
     if (!task || !action.completed) return next
+    if (isBreakItem(task)) return next
 
     if (next.mode === 'waiting' && task.id === next.currentTaskId) {
       task.status = 'skipped'
@@ -412,6 +479,7 @@ export function deriveRuntimeView(runtime, now = Date.now()) {
       secondsLeft: 0,
       waitingToStart: false,
       isOnBreak: false,
+      isPlannedBreak: false,
       paused: false,
       manualBreak: false,
       allDone: false,
@@ -422,9 +490,10 @@ export function deriveRuntimeView(runtime, now = Date.now()) {
   const settled = advanceRuntime(runtime, now)
   const currentTask = settled.currentTaskId ? findTask(settled, settled.currentTaskId) : null
   const pendingTasks = listPendingTasks(settled)
-  const nextTask = currentTask
-    ? pendingTasks.find(task => task.id !== currentTask.id) || null
-    : pendingTasks[0] || null
+  // "Next up" always points at the next real task, skipping any planned breaks.
+  const nextTask = pendingTasks.find(
+    task => !isBreakItem(task) && task.id !== currentTask?.id
+  ) || null
 
   return {
     runtime: settled,
@@ -434,6 +503,7 @@ export function deriveRuntimeView(runtime, now = Date.now()) {
     secondsLeft: getModeSecondsLeft(settled, now),
     waitingToStart: settled.mode === 'waiting',
     isOnBreak: settled.mode === 'auto_break',
+    isPlannedBreak: settled.mode === 'planned_break',
     paused: settled.mode === 'paused',
     manualBreak: settled.mode === 'manual_break',
     allDone: settled.mode === 'done',
@@ -452,7 +522,7 @@ export function estimateRuntimeEnd(runtime, now = Date.now()) {
     cursor = settled.plannedStartAt
   } else if (settled.mode === 'task') {
     cursor += getModeSecondsLeft(settled, now) * 1000
-  } else if (settled.mode === 'auto_break') {
+  } else if (settled.mode === 'auto_break' || settled.mode === 'planned_break') {
     cursor += getModeSecondsLeft(settled, now) * 1000
   }
 
@@ -465,7 +535,7 @@ export function estimateRuntimeEnd(runtime, now = Date.now()) {
       simulated = advanceRuntime(simulated, simulated.modeStartedAt + simulated.remainingTaskSeconds * 1000)
       continue
     }
-    if (simulated.mode === 'auto_break') {
+    if (simulated.mode === 'auto_break' || simulated.mode === 'planned_break') {
       simulated = advanceRuntime(simulated, simulated.modeStartedAt + simulated.remainingBreakSeconds * 1000)
       continue
     }
@@ -513,19 +583,30 @@ export function finalizeHistorySession(runtime, { now = Date.now(), date } = {})
   } else if (finalized.mode === 'auto_break') {
     closeSegment(finalized, 'auto_break', now)
     finalized.actualEndAt = now
+  } else if (finalized.mode === 'planned_break') {
+    closeSegment(finalized, 'planned_break', now)
+    const breakTask = finalized.currentTaskId ? findTask(finalized, finalized.currentTaskId) : null
+    if (breakTask) {
+      breakTask.status = 'completed'
+      breakTask.actualEndAt = now
+    }
+    finalized.actualEndAt = now
   }
 
-  const focusSeconds = finalized.tasks.reduce((sum, task) => sum + task.actualFocusSeconds, 0)
+  // Planned breaks are rest, not work: their time counts as break time and they
+  // are excluded from every task-level aggregate below.
+  const realTasks = finalized.tasks.filter(task => !isBreakItem(task))
+  const focusSeconds = realTasks.reduce((sum, task) => sum + task.actualFocusSeconds, 0)
   const pauseSeconds = finalized.segments
     .filter(segment => segment.type === 'pause' && segment.endedAt)
     .reduce((sum, segment) => sum + Math.max(0, Math.round((segment.endedAt - segment.startedAt) / 1000)), 0)
   const breakSeconds = finalized.segments
-    .filter(segment => ['manual_break', 'auto_break'].includes(segment.type) && segment.endedAt)
+    .filter(segment => ['manual_break', 'auto_break', 'planned_break'].includes(segment.type) && segment.endedAt)
     .reduce((sum, segment) => sum + Math.max(0, Math.round((segment.endedAt - segment.startedAt) / 1000)), 0)
 
-  const totalMinutes = finalized.tasks.reduce((sum, task) => sum + Math.round(task.plannedDurationSeconds / 60), 0)
-  const completedTasks = finalized.tasks.filter(task => task.status === 'completed').length
-  const skippedTasks = finalized.tasks.filter(task => task.status === 'skipped').length
+  const totalMinutes = realTasks.reduce((sum, task) => sum + Math.round(task.plannedDurationSeconds / 60), 0)
+  const completedTasks = realTasks.filter(task => task.status === 'completed').length
+  const skippedTasks = realTasks.filter(task => task.status === 'skipped').length
   const actualStartAt = finalized.actualStartAt
   const actualEndAt = finalized.actualEndAt ?? now
 
@@ -541,11 +622,11 @@ export function finalizeHistorySession(runtime, { now = Date.now(), date } = {})
     focusSeconds,
     pauseSeconds,
     breakSeconds,
-    totalTasks: finalized.tasks.length,
+    totalTasks: realTasks.length,
     completedTasks,
     skippedTasks,
     totalMinutes,
-    tasks: finalized.tasks.map(task => ({
+    tasks: realTasks.map(task => ({
       id: task.id,
       text: task.text,
       duration: Math.round(task.plannedDurationSeconds / 60),

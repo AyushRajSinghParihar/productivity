@@ -29,6 +29,7 @@ import {
   finalizeHistorySession,
   getStoredRuntime,
   hasRuntimeProgress,
+  isBreakItem,
   saveStoredRuntime,
 } from '../lib/runtime.mjs'
 import { computeStartTimes, msToTimeStr, timeStrToMinutes } from '../lib/schedule.mjs'
@@ -36,6 +37,7 @@ import { saveSession } from '../lib/history'
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`
 const blankTask = () => ({ id: uid(), text: '', duration: 25, completed: false, anchor: 'duration', endMin: null })
+const blankBreak = () => ({ id: uid(), type: 'break', text: '', duration: 5, completed: false, anchor: 'duration', endMin: null })
 
 const normalizeTask = (task) => ({
   ...task,
@@ -52,6 +54,7 @@ function runtimeTasksToDisplay(runtime) {
     .sort((left, right) => left.order - right.order)
     .map(task => ({
       id: task.id,
+      type: task.type === 'break' ? 'break' : 'task',
       text: task.text,
       duration: Math.round(task.plannedDurationSeconds / 60),
       completed: task.status === 'completed' || task.status === 'skipped',
@@ -192,7 +195,7 @@ export default function ManagePage() {
   const toggleCompleted = (id) => {
     if (activeRuntime) {
       const displayTask = runtimeTasksToDisplay(activeRuntime).find(task => task.id === id)
-      if (!displayTask || displayTask.completed) return
+      if (!displayTask || isBreakItem(displayTask) || displayTask.completed) return
       persistRuntime(applyRuntimeAction(activeRuntime, {
         type: 'toggle_task_from_planner',
         taskId: id,
@@ -201,6 +204,7 @@ export default function ManagePage() {
       return
     }
 
+    if (isBreakItem(tasks.find(task => task.id === id))) return
     persist(tasks.map(task => (task.id === id ? { ...task, completed: !task.completed } : task)))
   }
 
@@ -282,10 +286,13 @@ export default function ManagePage() {
   }
 
   const startSession = () => {
-    const valid = tasks.filter(task => task.text.trim())
-    if (!valid.length) return
+    // A session needs at least one real task; break-only lists can't start.
+    const realTasks = tasks.filter(task => !isBreakItem(task) && task.text.trim())
+    if (!realTasks.length) return
 
-    const reset = valid.map(task => ({ ...task, completed: false }))
+    // Carry breaks into the runtime even though they have no text.
+    const itemsToRun = tasks.filter(task => isBreakItem(task) || task.text.trim())
+    const reset = itemsToRun.map(task => ({ ...task, completed: false }))
     persist(reset)
 
     let plannedStartAt = null
@@ -329,7 +336,10 @@ export default function ManagePage() {
   const effectDate = getEffectiveDate(settings)
   const today = effectDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
   const displayTasks = activeRuntime ? runtimeTasksToDisplay(activeRuntime) : tasks
-  const validTasks = displayTasks.filter(task => task.text.trim())
+  const validTasks = displayTasks.filter(task => !isBreakItem(task) && task.text.trim())
+  const breakMin = displayTasks
+    .filter(isBreakItem)
+    .reduce((sum, task) => sum + Number(task.duration), 0)
   const { starts: taskStartTimes, ends: taskEndTimes, overdue: taskOverdue } = computeStartTimes(
     displayTasks,
     activeRuntime
@@ -347,7 +357,7 @@ export default function ManagePage() {
     now ?? Date.now(),
   )
   const totalMin = displayTasks.reduce((sum, task, idx) => (
-    task.text.trim() ? sum + Math.round((taskEndTimes[idx] - taskStartTimes[idx]) / 60000) : sum
+    !isBreakItem(task) && task.text.trim() ? sum + Math.round((taskEndTimes[idx] - taskStartTimes[idx]) / 60000) : sum
   ), 0)
   const totalHrs = (totalMin / 60).toFixed(1)
 
@@ -361,7 +371,9 @@ export default function ManagePage() {
       summaryLine = `${view.allDone ? 'Session finished' : 'Session active'} \u00b7 wraps up ~${new Date(view.predictedEndAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
     }
   } else if (validTasks.length > 0) {
-    const lastTaskIdx = displayTasks.findLastIndex(task => task.text.trim())
+    // Last item that actually runs — a real task or a trailing break (which runs
+    // as a wind-down) — so the wrap-up time includes it.
+    const lastTaskIdx = displayTasks.findLastIndex(task => isBreakItem(task) || task.text.trim())
     const endTime = lastTaskIdx >= 0 ? taskEndTimes[lastTaskIdx] : null
     summaryLine = endTime
       ? `Starts at ${msToTimeStr(taskStartTimes[0])} \u00b7 wraps up ~${new Date(endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
@@ -421,22 +433,46 @@ export default function ManagePage() {
           </SortableContext>
         </DndContext>
 
-        <button
-          onClick={() => {
-            if (sessionLocked) return
-            const fresh = blankTask()
-            persist([...tasks, fresh])
-            setTimeout(() => inputRefs.current[fresh.id]?.focus(), 50)
-          }}
-          disabled={sessionLocked}
-          className="mt-4 text-[var(--text-dim)] hover:text-[var(--text-muted)] disabled:opacity-40 disabled:cursor-not-allowed text-base flex items-center gap-2 transition-colors px-2"
-        >
-          <span className="text-lg leading-none">+</span> add task
-        </button>
+        <div className="mt-4 flex items-center gap-5">
+          <button
+            onClick={() => {
+              if (sessionLocked) return
+              const fresh = blankTask()
+              persist([...tasks, fresh])
+              setTimeout(() => inputRefs.current[fresh.id]?.focus(), 50)
+            }}
+            disabled={sessionLocked}
+            className="text-[var(--text-dim)] hover:text-[var(--text-muted)] disabled:opacity-40 disabled:cursor-not-allowed text-base flex items-center gap-2 transition-colors px-2"
+          >
+            <span className="text-lg leading-none">+</span> add task
+          </button>
+          <button
+            onClick={() => {
+              if (sessionLocked) return
+              const fresh = blankBreak()
+              persist([...tasks, fresh])
+              setTimeout(() => inputRefs.current[fresh.id]?.focus(), 50)
+            }}
+            disabled={sessionLocked}
+            className="text-[var(--text-dim)] hover:text-[var(--success)] disabled:opacity-40 disabled:cursor-not-allowed text-base flex items-center gap-2 transition-colors px-2"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 8h1a4 4 0 0 1 0 8h-1" />
+              <path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z" />
+              <line x1="6" y1="1" x2="6" y2="4" />
+              <line x1="10" y1="1" x2="10" y2="4" />
+              <line x1="14" y1="1" x2="14" y2="4" />
+            </svg>
+            add break
+          </button>
+        </div>
 
         <div className="mt-10 pt-5 border-t border-[var(--border)] flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="text-[var(--text-muted)] text-sm space-y-0.5">
-            <p>{validTasks.length} task{validTasks.length !== 1 ? 's' : ''} &middot; {totalMin} min ({totalHrs}h)</p>
+            <p>
+              {validTasks.length} task{validTasks.length !== 1 ? 's' : ''} &middot; {totalMin} min ({totalHrs}h)
+              {breakMin > 0 ? ` · ${breakMin} min break` : ''}
+            </p>
             {summaryLine && (
               <p className="text-[var(--text-dim)] text-xs">{summaryLine}</p>
             )}
@@ -454,7 +490,7 @@ export default function ManagePage() {
               )}
               <button
                 onClick={startSession}
-                disabled={tasks.filter(task => task.text.trim()).length === 0}
+                disabled={tasks.filter(task => !isBreakItem(task) && task.text.trim()).length === 0}
                 className="bg-[var(--text)] text-[var(--bg)] font-bold px-7 py-2.5 rounded-full hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
               >
                 {sessionLocked ? 'Restart' : 'Start Session'}
@@ -509,11 +545,19 @@ function SortableTask({
     opacity: isDragging ? 0.5 : 1,
   }
 
+  const isBreak = isBreakItem(task)
   const startStr = msToTimeStr(startMs)
   const endStr = msToTimeStr(endMs)
   const durationMin = Math.max(1, Math.round((endMs - startMs) / 60000))
 
   const handleEndChange = (newEndStr) => {
+    if (isBreak) {
+      // Breaks stay duration-only: editing the end just resizes the break.
+      let diff = timeStrToMinutes(newEndStr) - timeStrToMinutes(startStr)
+      if (diff <= 0) diff += 24 * 60
+      updateFields(task.id, { anchor: 'duration', endMin: null, duration: Math.max(1, Math.min(480, diff)) })
+      return
+    }
     updateFields(task.id, { anchor: 'end', endMin: timeStrToMinutes(newEndStr) })
   }
 
@@ -529,7 +573,9 @@ function SortableTask({
     <div
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-3 group rounded-lg px-2 py-1 hover:bg-[var(--bg-hover)] transition-colors"
+      className={`flex items-center gap-3 group rounded-lg px-2 py-1 hover:bg-[var(--bg-hover)] transition-colors ${
+        isBreak ? 'border-l-2 border-[var(--success)] pl-2.5' : ''
+      }`}
     >
       <button
         {...attributes}
@@ -548,20 +594,35 @@ function SortableTask({
         </svg>
       </button>
 
-      <button
-        onClick={() => toggleCompleted(task.id)}
-        className={`w-5 h-5 rounded border shrink-0 flex items-center justify-center transition-colors ${
-          task.completed
-            ? 'bg-[var(--success)] border-[var(--success)] text-white'
-            : 'border-[var(--border)] hover:border-[var(--text-muted)]'
-        }`}
-      >
-        {task.completed && (
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="20 6 9 17 4 12" />
+      {isBreak ? (
+        <span
+          className="w-5 h-5 shrink-0 flex items-center justify-center text-[var(--success)]"
+          title="Break"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 8h1a4 4 0 0 1 0 8h-1" />
+            <path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z" />
+            <line x1="6" y1="1" x2="6" y2="4" />
+            <line x1="10" y1="1" x2="10" y2="4" />
+            <line x1="14" y1="1" x2="14" y2="4" />
           </svg>
-        )}
-      </button>
+        </span>
+      ) : (
+        <button
+          onClick={() => toggleCompleted(task.id)}
+          className={`w-5 h-5 rounded border shrink-0 flex items-center justify-center transition-colors ${
+            task.completed
+              ? 'bg-[var(--success)] border-[var(--success)] text-white'
+              : 'border-[var(--border)] hover:border-[var(--text-muted)]'
+          }`}
+        >
+          {task.completed && (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          )}
+        </button>
+      )}
 
       <div className="flex-1 min-w-0">
         <input
@@ -571,10 +632,10 @@ function SortableTask({
           onPaste={e => handlePaste(e, task.id)}
           onKeyDown={e => handleKeyDown(e, task.id, idx)}
           disabled={sessionLocked}
-          placeholder="What are you working on?"
-          className={`w-full bg-transparent outline-none py-2.5 text-xl placeholder:text-[var(--text-dim)] caret-[var(--text)] text-[var(--text)] disabled:opacity-70 ${
-            task.completed ? 'line-through opacity-50' : ''
-          }`}
+          placeholder={isBreak ? 'Break' : 'What are you working on?'}
+          className={`w-full bg-transparent outline-none py-2.5 text-xl placeholder:text-[var(--text-dim)] caret-[var(--text)] disabled:opacity-70 ${
+            isBreak ? 'text-[var(--success)] font-medium' : 'text-[var(--text)]'
+          } ${task.completed && !isBreak ? 'line-through opacity-50' : ''}`}
         />
         {runtimeLabel && (
           <p className="text-[var(--text-dim)] text-[11px] uppercase tracking-widest -mt-1 mb-1">
