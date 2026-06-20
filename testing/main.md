@@ -4,6 +4,9 @@
 - Starting a session snapshots the task list, task order, task durations, planned start time, and break settings into one runtime object. Edits made afterward do not change the active session.
 - If the planned start time is in the future, the dashboard stays in a waiting state until that time and the first task does not begin early.
 - The original session start timestamp never changes after the session begins.
+- Editing a task's end pins its end time; editing its duration pins its length; editing the first task's start pins the session start. The most recently edited field is held and the unpinned one is recomputed against `end = start + duration`.
+- When a session starts after its planned time, end-anchored tasks keep their absolute end (duration shrinks to absorb the late start) while duration-anchored tasks keep their length (the end slides). An unpinned (auto) planned start follows the current time; only a user-pinned future start produces a waiting countdown.
+- A pinned end already in the past clamps to the minimum task length and is flagged overdue; the session still starts. A backward end gap is treated as overdue-today unless it exceeds 12 hours, in which case it is a genuine next-day (overnight) end.
 - Auto-breaks occur only between completed timed tasks when breaks were enabled in the session snapshot and another pending task exists.
 - Manual `Pause` and `Take a Break` stop elapsed focus time without rewriting the task timeline. Resuming returns to the same active task with the same remaining focus time.
 - A 1 PM session followed by a 2 hour manual break resumes the same task, records a 2 hour break segment, keeps the task's actual focus duration unchanged, and extends the actual session end by 2 hours.
@@ -19,6 +22,7 @@
 - `applyRuntimeAction` handles `pause`, `resume`, `startManualBreak`, `endManualBreak`, `skipTask`, `skipBreak`, `completeTask`, and `toggleTaskFromPlanner` without corrupting the session timeline.
 - `finalizeHistorySession` derives session totals, per-task actual timing, and break totals from runtime segments.
 - `migrateLegacySession` archives any safely-detectable completed progress and clears incompatible live timing state.
+- `createRuntimeState` recomputes end-anchored task durations against the effective (possibly forced-to-now) start so absolute ends are preserved; `computeStartTimes` (schedule.mjs) materializes per-row start/end/overdue from the same `anchoredDurationMinutes` rule. Both are covered with injected clocks, including the open-16:05 / pin-18:00 / start-16:17 → end-18:00 replay.
 
 ## Integration / Functional Tests
 - Dashboard countdown and manage page summary stay consistent across reloads with an active session.
@@ -39,3 +43,5 @@
 3. Start a task, press `Take a Break`, wait, then resume and confirm the same task still has the same remaining countdown.
 4. Start at 1 PM, take a long manual break, resume, and confirm history shows the original start plus added break time rather than an inflated task duration.
 5. Edit task durations after a session starts and confirm the live countdown does not change until the next session.
+6. Open the planner, note the time, type an end on task 1, wait a couple of minutes, then Start: the dashboard's first-task end equals the typed end (not end + the elapsed typing time). Repeat setting a duration instead and confirm the end slides forward by the elapsed time.
+7. Type an end a couple of minutes in the past and confirm the row is flagged (danger) but Start still works.

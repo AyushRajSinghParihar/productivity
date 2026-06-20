@@ -31,55 +31,17 @@ import {
   hasRuntimeProgress,
   saveStoredRuntime,
 } from '../lib/runtime.mjs'
+import { computeStartTimes, msToTimeStr, timeStrToMinutes } from '../lib/schedule.mjs'
 import { saveSession } from '../lib/history'
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`
-const blankTask = () => ({ id: uid(), text: '', duration: 25, completed: false })
+const blankTask = () => ({ id: uid(), text: '', duration: 25, completed: false, anchor: 'duration', endMin: null })
 
-function computeStartTimes(tasks, { sessionStartAt, plannedStart, breaksEnabled = false, breakDurationMinutes = 0 }) {
-  let base
-  if (sessionStartAt) {
-    base = sessionStartAt
-  } else if (plannedStart) {
-    const [h, m] = plannedStart.split(':').map(Number)
-    const d = new Date()
-    d.setHours(h, m, 0, 0)
-    base = d.getTime()
-  } else {
-    const now = Date.now()
-    const remainder = (5 - (Math.floor(now / 60000) % 5)) % 5
-    base = now + remainder * 60000
-  }
-
-  const starts = []
-  let cursor = base
-
-  for (let index = 0; index < tasks.length; index += 1) {
-    const task = tasks[index]
-    starts.push(cursor)
-    cursor += Number(task.duration) * 60 * 1000
-
-    const hasFutureValidTask =
-      !!task.text?.trim() &&
-      tasks.slice(index + 1).some(candidate => candidate.text?.trim())
-
-    if (breaksEnabled && hasFutureValidTask) {
-      cursor += breakDurationMinutes * 60 * 1000
-    }
-  }
-
-  return starts
-}
-
-function msToTimeStr(ms) {
-  const d = new Date(ms)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
-function timeStrToMinutes(str) {
-  const [h, m] = str.split(':').map(Number)
-  return h * 60 + m
-}
+const normalizeTask = (task) => ({
+  ...task,
+  anchor: task.anchor === 'end' ? 'end' : 'duration',
+  endMin: Number.isFinite(task.endMin) ? task.endMin : null,
+})
 
 function runtimesDiffer(left, right) {
   return JSON.stringify(left) !== JSON.stringify(right)
@@ -101,6 +63,7 @@ export default function ManagePage() {
   const [tasks, setTasks] = useState([blankTask()])
   const [runtime, setRuntime] = useState(null)
   const [plannedStart, setPlannedStart] = useState(null)
+  const [plannedStartMode, setPlannedStartMode] = useState('auto')
   const [now, setNow] = useState(null)
   const [mounted, setMounted] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
@@ -124,19 +87,21 @@ export default function ManagePage() {
 
     const rawTasks = localStorage.getItem('focusboard-tasks')
     if (rawTasks) {
-      const parsed = JSON.parse(rawTasks)
+      const parsed = JSON.parse(rawTasks).map(normalizeTask)
       setTasks(parsed.length ? parsed : [blankTask()])
     }
 
     const storedRuntime = getStoredRuntime(localStorage)
     if (storedRuntime) setRuntime(storedRuntime)
 
+    setPlannedStartMode(localStorage.getItem('focusboard-planned-start-mode') === 'fixed' ? 'fixed' : 'auto')
+
     const storedPlannedStart = localStorage.getItem('focusboard-planned-start')
     if (storedPlannedStart) {
       setPlannedStart(storedPlannedStart)
     } else if (!storedRuntime) {
       const loaded = rawTasks ? JSON.parse(rawTasks) : [blankTask()]
-      const starts = computeStartTimes(loaded, { plannedStart: null })
+      const { starts } = computeStartTimes(loaded, { plannedStartMode: 'auto' }, Date.now())
       const defaultStart = msToTimeStr(starts[0])
       setPlannedStart(defaultStart)
       localStorage.setItem('focusboard-planned-start', defaultStart)
@@ -145,7 +110,7 @@ export default function ManagePage() {
     const poll = setInterval(() => {
       const nextTasks = localStorage.getItem('focusboard-tasks')
       if (nextTasks) {
-        const parsed = JSON.parse(nextTasks)
+        const parsed = JSON.parse(nextTasks).map(normalizeTask)
         setTasks(parsed.length ? parsed : [blankTask()])
       } else {
         setTasks([blankTask()])
@@ -157,6 +122,7 @@ export default function ManagePage() {
       if (!nextRuntime) {
         const nextPlannedStart = localStorage.getItem('focusboard-planned-start')
         setPlannedStart(nextPlannedStart || null)
+        setPlannedStartMode(localStorage.getItem('focusboard-planned-start-mode') === 'fixed' ? 'fixed' : 'auto')
       }
     }, 2000)
 
@@ -218,6 +184,11 @@ export default function ManagePage() {
     persist(tasks.map(task => (task.id === id ? { ...task, [field]: value } : task)))
   }
 
+  const updateFields = (id, patch) => {
+    if (sessionLocked) return
+    persist(tasks.map(task => (task.id === id ? { ...task, ...patch } : task)))
+  }
+
   const toggleCompleted = (id) => {
     if (activeRuntime) {
       const displayTask = runtimeTasksToDisplay(activeRuntime).find(task => task.id === id)
@@ -246,7 +217,7 @@ export default function ManagePage() {
 
     e.preventDefault()
     const idx = tasks.findIndex(task => task.id === id)
-    const newRows = lines.map(line => ({ id: uid(), text: line, duration: 25, completed: false }))
+    const newRows = lines.map(line => ({ id: uid(), text: line, duration: 25, completed: false, anchor: 'duration', endMin: null }))
     const next = [...tasks]
     next.splice(idx, 1, ...newRows)
     persist(next)
@@ -317,13 +288,15 @@ export default function ManagePage() {
     const reset = valid.map(task => ({ ...task, completed: false }))
     persist(reset)
 
-    const effectivePlannedStart = plannedStart || localStorage.getItem('focusboard-planned-start')
-    let plannedStartAt = Date.now()
-    if (effectivePlannedStart) {
-      const [h, m] = effectivePlannedStart.split(':').map(Number)
-      const planned = new Date()
-      planned.setHours(h, m, 0, 0)
-      plannedStartAt = planned.getTime()
+    let plannedStartAt = null
+    if (plannedStartMode === 'fixed') {
+      const effectivePlannedStart = plannedStart || localStorage.getItem('focusboard-planned-start')
+      if (effectivePlannedStart) {
+        const [h, m] = effectivePlannedStart.split(':').map(Number)
+        const planned = new Date()
+        planned.setHours(h, m, 0, 0)
+        plannedStartAt = planned.getTime()
+      }
     }
 
     const nextRuntime = createRuntimeState({
@@ -345,7 +318,9 @@ export default function ManagePage() {
 
     persistRuntime(null)
     localStorage.removeItem('focusboard-planned-start')
+    localStorage.removeItem('focusboard-planned-start-mode')
     setPlannedStart(null)
+    setPlannedStartMode('auto')
     setConfirmReset(false)
   }
 
@@ -355,20 +330,26 @@ export default function ManagePage() {
   const today = effectDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
   const displayTasks = activeRuntime ? runtimeTasksToDisplay(activeRuntime) : tasks
   const validTasks = displayTasks.filter(task => task.text.trim())
-  const totalMin = validTasks.reduce((sum, task) => sum + Number(task.duration), 0)
-  const totalHrs = (totalMin / 60).toFixed(1)
-  const taskStartTimes = computeStartTimes(displayTasks, activeRuntime
-    ? {
-        sessionStartAt: activeRuntime.plannedStartAt,
-        breaksEnabled: activeRuntime.breakSettings.enabled,
-        breakDurationMinutes: activeRuntime.breakSettings.durationSeconds / 60,
-      }
-    : {
-        plannedStart,
-        breaksEnabled: settings.breaksEnabled,
-        breakDurationMinutes: settings.breakDuration,
-      }
+  const { starts: taskStartTimes, ends: taskEndTimes, overdue: taskOverdue } = computeStartTimes(
+    displayTasks,
+    activeRuntime
+      ? {
+          sessionStartAt: activeRuntime.plannedStartAt,
+          breaksEnabled: activeRuntime.breakSettings.enabled,
+          breakDurationMinutes: activeRuntime.breakSettings.durationSeconds / 60,
+        }
+      : {
+          plannedStart,
+          plannedStartMode,
+          breaksEnabled: settings.breaksEnabled,
+          breakDurationMinutes: settings.breakDuration,
+        },
+    now ?? Date.now(),
   )
+  const totalMin = displayTasks.reduce((sum, task, idx) => (
+    task.text.trim() ? sum + Math.round((taskEndTimes[idx] - taskStartTimes[idx]) / 60000) : sum
+  ), 0)
+  const totalHrs = (totalMin / 60).toFixed(1)
 
   let summaryLine = null
   if (activeRuntime) {
@@ -381,9 +362,7 @@ export default function ManagePage() {
     }
   } else if (validTasks.length > 0) {
     const lastTaskIdx = displayTasks.findLastIndex(task => task.text.trim())
-    const endTime = lastTaskIdx >= 0
-      ? taskStartTimes[lastTaskIdx] + Number(displayTasks[lastTaskIdx].duration) * 60 * 1000
-      : null
+    const endTime = lastTaskIdx >= 0 ? taskEndTimes[lastTaskIdx] : null
     summaryLine = endTime
       ? `Starts at ${msToTimeStr(taskStartTimes[0])} \u00b7 wraps up ~${new Date(endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
       : null
@@ -419,14 +398,19 @@ export default function ManagePage() {
                   idx={idx}
                   isFirst={idx === 0}
                   startMs={taskStartTimes[idx]}
+                  endMs={taskEndTimes[idx]}
+                  overdue={taskOverdue[idx]}
                   sessionLocked={sessionLocked}
                   onPlannedStartChange={(value) => {
                     if (sessionLocked) return
                     setPlannedStart(value)
+                    setPlannedStartMode('fixed')
                     localStorage.setItem('focusboard-planned-start', value)
+                    localStorage.setItem('focusboard-planned-start-mode', 'fixed')
                   }}
                   inputRefs={inputRefs}
                   updateField={updateField}
+                  updateFields={updateFields}
                   toggleCompleted={toggleCompleted}
                   handlePaste={handlePaste}
                   handleKeyDown={handleKeyDown}
@@ -498,10 +482,13 @@ function SortableTask({
   idx,
   isFirst,
   startMs,
+  endMs,
+  overdue,
   sessionLocked,
   onPlannedStartChange,
   inputRefs,
   updateField,
+  updateFields,
   toggleCompleted,
   handlePaste,
   handleKeyDown,
@@ -523,14 +510,11 @@ function SortableTask({
   }
 
   const startStr = msToTimeStr(startMs)
-  const endStr = msToTimeStr(startMs + Number(task.duration) * 60 * 1000)
+  const endStr = msToTimeStr(endMs)
+  const durationMin = Math.max(1, Math.round((endMs - startMs) / 60000))
 
   const handleEndChange = (newEndStr) => {
-    const startMin = timeStrToMinutes(startStr)
-    const newEndMin = timeStrToMinutes(newEndStr)
-    let diff = newEndMin - startMin
-    if (diff <= 0) diff += 24 * 60
-    updateField(task.id, 'duration', Math.max(1, Math.min(480, diff)))
+    updateFields(task.id, { anchor: 'end', endMin: timeStrToMinutes(newEndStr) })
   }
 
   const runtimeLabel = task.runtimeStatus === 'skipped'
@@ -611,21 +595,21 @@ function SortableTask({
         )}
         <span className="hidden sm:inline text-[var(--text-dim)] text-xs">&rarr;</span>
         {sessionLocked ? (
-          <span className="hidden sm:inline text-[var(--text-muted)] text-xs tabular-nums">{endStr}</span>
+          <span className={`hidden sm:inline text-xs tabular-nums ${overdue ? 'text-[var(--danger)]' : 'text-[var(--text-muted)]'}`}>{endStr}</span>
         ) : (
-          <span className="hidden sm:contents">
+          <span className="hidden sm:contents" title={overdue ? "Can't finish by this time" : undefined}>
             <TimeInput
               value={endStr}
               onChange={handleEndChange}
-              className="w-16 bg-[var(--bg-hover)] border border-[var(--border)] rounded px-1.5 py-1 text-xs text-center outline-none focus:border-[var(--text-muted)] text-[var(--text)]"
+              className={`w-16 bg-[var(--bg-hover)] border rounded px-1.5 py-1 text-xs text-center outline-none focus:border-[var(--text-muted)] text-[var(--text)] ${overdue ? 'border-[var(--danger)] text-[var(--danger)]' : 'border-[var(--border)]'}`}
             />
           </span>
         )}
 
         <input
           type="number"
-          value={task.duration}
-          onChange={e => updateField(task.id, 'duration', Math.max(1, Number(e.target.value)))}
+          value={durationMin}
+          onChange={e => updateFields(task.id, { anchor: 'duration', endMin: null, duration: Math.max(1, Number(e.target.value)) })}
           disabled={sessionLocked}
           className="w-12 bg-[var(--bg-hover)] border border-[var(--border)] rounded px-2 py-1 text-xs text-center outline-none focus:border-[var(--text-muted)] text-[var(--text)] disabled:opacity-50"
           min="1"

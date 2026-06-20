@@ -29,6 +29,7 @@ export function checkAndResetDay() {
   // Clear all session state
   localStorage.removeItem('focusboard-tasks')
   localStorage.removeItem('focusboard-planned-start')
+  localStorage.removeItem('focusboard-planned-start-mode')
   localStorage.removeItem(RUNTIME_STORAGE_KEY)
 
   // Stamp today's date

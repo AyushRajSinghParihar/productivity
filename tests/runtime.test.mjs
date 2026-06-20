@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   advanceRuntime,
+  anchoredDurationMinutes,
   applyRuntimeAction,
   createRuntimeState,
   deriveRuntimeView,
@@ -230,4 +231,108 @@ test('migrateLegacySession archives safe completed progress and clears incompati
   assert.equal(migrated.session.completedTasks, 1)
   assert.equal(storage.getItem('focusboard-session'), null)
   assert.equal(storage.getItem('focusboard-planned-start'), null)
+})
+
+// --- Edit-intent / anchor model ------------------------------------------
+// Use LOCAL wall-clock construction so assertions are timezone-stable
+// (anchored durations resolve against minutesSinceMidnightOf, which is local).
+const localMs = (h, m) => new Date(2026, 3, 21, h, m, 0, 0).getTime()
+
+test('end-anchored task preserves its absolute end when the start is forced to now (bug replay)', () => {
+  const tasks = [{ id: 't1', text: 'Deep work', anchor: 'end', endMin: 18 * 60, duration: 115, completed: false }]
+  const runtime = createRuntimeState({
+    tasks,
+    plannedStartAt: localMs(16, 5), // planned 16:05 — already in the past
+    now: localMs(16, 17),           // clicked Start 12 min late
+    settings: {},
+  })
+
+  assert.equal(runtime.actualStartAt, localMs(16, 17))     // start snaps to now
+  assert.equal(runtime.tasks[0].plannedDurationSeconds, 103 * 60) // duration shrinks 115 -> 103
+  const endAt = runtime.actualStartAt + runtime.tasks[0].plannedDurationSeconds * 1000
+  assert.equal(endAt, localMs(18, 0))                      // end stays 18:00, not 18:12
+})
+
+test('duration-anchored task keeps its length and lets the end slide on a late start', () => {
+  const tasks = [{ id: 't1', text: 'Deep work', anchor: 'duration', duration: 115, completed: false }]
+  const runtime = createRuntimeState({ tasks, plannedStartAt: localMs(16, 5), now: localMs(16, 17), settings: {} })
+
+  assert.equal(runtime.tasks[0].plannedDurationSeconds, 115 * 60)
+  const endAt = runtime.actualStartAt + runtime.tasks[0].plannedDurationSeconds * 1000
+  assert.equal(endAt, localMs(18, 12)) // slides forward, as intended for a duration anchor
+})
+
+test('an end-anchored later task derives its duration after upstream tasks and breaks', () => {
+  const tasks = [
+    { id: 't1', text: 'First', anchor: 'duration', duration: 30, completed: false },
+    { id: 't2', text: 'Second', anchor: 'end', endMin: 18 * 60, completed: false },
+  ]
+
+  const noBreak = createRuntimeState({ tasks, plannedStartAt: localMs(16, 0), now: localMs(16, 0), settings: {} })
+  assert.equal(noBreak.tasks[1].plannedDurationSeconds, 90 * 60) // 16:30 -> 18:00
+
+  const withBreak = createRuntimeState({
+    tasks,
+    plannedStartAt: localMs(16, 0),
+    now: localMs(16, 0),
+    settings: { breaksEnabled: true, breakDuration: 5 },
+  })
+  assert.equal(withBreak.tasks[1].plannedDurationSeconds, 85 * 60) // 16:35 -> 18:00 after a 5-min break
+})
+
+test('an already-passed end pin clamps to the minimum and flags overdue', () => {
+  const tasks = [{ id: 't1', text: 'Late', anchor: 'end', endMin: 17 * 60, completed: false }]
+  const runtime = createRuntimeState({ tasks, plannedStartAt: localMs(17, 30), now: localMs(17, 30), settings: {} })
+
+  assert.equal(runtime.tasks[0].plannedDurationSeconds, 60)
+  assert.equal(runtime.tasks[0].overdue, true)
+})
+
+test('anchoredDurationMinutes distinguishes overdue-today from a genuine overnight task', () => {
+  assert.deepEqual(anchoredDurationMinutes(16 * 60 + 17, 18 * 60), { minutes: 103, overdue: false })
+  assert.deepEqual(anchoredDurationMinutes(17 * 60 + 30, 17 * 60), { minutes: 1, overdue: true })
+  assert.deepEqual(anchoredDurationMinutes(23 * 60, 6 * 60), { minutes: 7 * 60, overdue: false })
+})
+
+test('a future planned start waits, then the end-anchored first task ends at its pin', () => {
+  const tasks = [{ id: 't1', text: 'Block', anchor: 'end', endMin: 14 * 60, completed: false }]
+  const runtime = createRuntimeState({ tasks, plannedStartAt: localMs(13, 0), now: localMs(12, 45), settings: {} })
+
+  assert.equal(runtime.mode, 'waiting')
+  assert.equal(runtime.tasks[0].plannedDurationSeconds, 60 * 60) // 13:00 -> 14:00
+
+  const live = deriveRuntimeView(runtime, localMs(13, 0))
+  assert.equal(live.mode, 'task')
+  const endAt = live.runtime.modeStartedAt + live.runtime.remainingTaskSeconds * 1000
+  assert.equal(endAt, localMs(14, 0))
+})
+
+test('tasks without anchor fields behave as duration-anchored (back-compat)', () => {
+  const tasks = [{ id: 't1', text: 'Legacy', duration: 50, completed: false }]
+  const runtime = createRuntimeState({ tasks, plannedStartAt: localMs(9, 0), now: localMs(9, 0), settings: {} })
+
+  assert.equal(runtime.tasks[0].anchor, 'duration')
+  assert.equal(runtime.tasks[0].endMin, null)
+  assert.equal(runtime.tasks[0].plannedDurationSeconds, 50 * 60)
+})
+
+test('runtime snapshot round-trips anchor and endMin', () => {
+  const storage = createMockStorage()
+  const tasks = [{ id: 't1', text: 'Pinned', anchor: 'end', endMin: 18 * 60, completed: false }]
+  const runtime = createRuntimeState({ tasks, plannedStartAt: localMs(16, 0), now: localMs(16, 0), settings: {} })
+
+  saveStoredRuntime(storage, runtime)
+  const stored = getStoredRuntime(storage)
+  assert.equal(stored.tasks[0].anchor, 'end')
+  assert.equal(stored.tasks[0].endMin, 18 * 60)
+})
+
+test('full path: a planner end pin survives startSession when started late (auto start)', () => {
+  // The shape the planner persists after the user types an end of 18:00, then
+  // startSession in auto mode passes plannedStartAt: null so the runtime uses now.
+  const persisted = [{ id: 't1', text: 'Deep work', anchor: 'end', endMin: 18 * 60, duration: 115, completed: false }]
+  const runtime = createRuntimeState({ tasks: persisted, plannedStartAt: null, now: localMs(16, 17), settings: {} })
+
+  const endAt = runtime.actualStartAt + runtime.tasks[0].plannedDurationSeconds * 1000
+  assert.equal(endAt, localMs(18, 0))
 })

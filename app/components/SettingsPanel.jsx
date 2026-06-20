@@ -11,6 +11,7 @@ const ALL_KEYS = [
   'focusboard-history',
   'focusboard-runtime',
   'focusboard-planned-start',
+  'focusboard-planned-start-mode',
   'focusboard-paused-at',
   'focusboard-manual-break',
 ]

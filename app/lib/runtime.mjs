@@ -29,6 +29,8 @@ function toValidTasks(tasks = []) {
       text: task.text.trim(),
       order: index,
       plannedDurationSeconds: Math.max(60, Number(task.duration || 0) * 60),
+      anchor: task.anchor === 'end' ? 'end' : 'duration',
+      endMin: Number.isFinite(task.endMin) ? task.endMin : null,
       status: 'pending',
       actualStartAt: null,
       actualEndAt: null,
@@ -39,6 +41,42 @@ function toValidTasks(tasks = []) {
 function getBreakDurationSeconds(settings = {}) {
   const minutes = Number(settings?.breakDuration ?? 5)
   return Math.max(60, Math.min(60 * 60, minutes * 60))
+}
+
+export function minutesSinceMidnightOf(ms) {
+  const d = new Date(ms)
+  return d.getHours() * 60 + d.getMinutes()
+}
+
+// Resolve an end-anchored task's duration (in minutes) from a wall-clock start
+// and a wall-clock end (both minutes-since-midnight). Distinguishes "overdue
+// today" (a small backward gap -> clamp to the minimum and flag) from a genuine
+// overnight task (gap wider than 12h -> roll the end into the next day).
+export function anchoredDurationMinutes(startMin, endMin) {
+  const raw = endMin - startMin
+  if (raw > 0) return { minutes: raw, overdue: false }
+  if (raw > -720) return { minutes: 1, overdue: true }
+  return { minutes: raw + 24 * 60, overdue: false }
+}
+
+// Recompute end-anchored tasks' planned durations against the *actual* start the
+// session will use, walking the chain so each task's absolute end is preserved
+// regardless of upstream durations or inter-task breaks. Mutates the snapshot.
+function applyAnchors(snapshot, effectiveStartAt, breakSettings) {
+  let cursor = effectiveStartAt
+  for (let i = 0; i < snapshot.length; i += 1) {
+    const task = snapshot[i]
+    if (task.anchor === 'end' && task.endMin != null) {
+      const { minutes, overdue } = anchoredDurationMinutes(minutesSinceMidnightOf(cursor), task.endMin)
+      task.plannedDurationSeconds = Math.max(60, Math.round(minutes * 60))
+      task.overdue = overdue
+    }
+    cursor += task.plannedDurationSeconds * 1000
+    if (breakSettings.enabled && i < snapshot.length - 1) {
+      cursor += breakSettings.durationSeconds * 1000
+    }
+  }
+  return snapshot
 }
 
 function findTask(runtime, taskId) {
@@ -241,6 +279,11 @@ export function createRuntimeState({ tasks, plannedStartAt, now = Date.now(), se
   if (!snapshot.length) return null
 
   const effectiveStartAt = plannedStartAt && plannedStartAt > now ? plannedStartAt : now
+  const breakSettings = {
+    enabled: !!settings?.breaksEnabled,
+    durationSeconds: getBreakDurationSeconds(settings),
+  }
+  applyAnchors(snapshot, effectiveStartAt, breakSettings)
   const firstTask = snapshot[0]
   const runtime = {
     version: RUNTIME_VERSION,
@@ -250,10 +293,7 @@ export function createRuntimeState({ tasks, plannedStartAt, now = Date.now(), se
     actualStartAt: effectiveStartAt,
     actualEndAt: null,
     archivedAt: null,
-    breakSettings: {
-      enabled: !!settings?.breaksEnabled,
-      durationSeconds: getBreakDurationSeconds(settings),
-    },
+    breakSettings,
     mode: effectiveStartAt > now ? 'waiting' : 'task',
     modeStartedAt: effectiveStartAt > now ? now : effectiveStartAt,
     currentTaskId: firstTask.id,
@@ -554,7 +594,10 @@ export function saveStoredRuntime(storage, runtime) {
 
 export function clearLegacyTimingState(storage, { clearPlannedStart = false } = {}) {
   for (const key of LEGACY_TIMING_KEYS) storage.removeItem(key)
-  if (clearPlannedStart) storage.removeItem('focusboard-planned-start')
+  if (clearPlannedStart) {
+    storage.removeItem('focusboard-planned-start')
+    storage.removeItem('focusboard-planned-start-mode')
+  }
 }
 
 export function migrateLegacySession(storage, { date, now = Date.now() } = {}) {
